@@ -7,6 +7,7 @@ import threading
 import subprocess
 import sys
 import os
+import datetime
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -145,7 +146,8 @@ def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
 
     # ── Exportar Excel con formato ────────────────────────────────────────────
     carpeta = os.path.dirname(ruta_facturas)
-    ruta_resultado = os.path.join(carpeta, "resultado_conciliacion.xlsx")
+    fecha_hoy = datetime.date.today().strftime("%d-%m-%Y")
+    ruta_resultado = os.path.join(carpeta, f"conciliacion_Original_{fecha_hoy}.xlsx")
 
     df = df.map(_limpiar)
     df.to_excel(ruta_resultado, index=False, engine="openpyxl")
@@ -309,7 +311,8 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
 
     # ── Exportar Excel con formato ────────────────────────────────────────────
     carpeta        = os.path.dirname(ruta_facturas)
-    ruta_resultado = os.path.join(carpeta, "resultado_conciliacion.xlsx")
+    fecha_hoy      = datetime.date.today().strftime("%d-%m-%Y")
+    ruta_resultado = os.path.join(carpeta, f"conciliacion_Bankinter_{fecha_hoy}.xlsx")
 
     df = df.map(_limpiar)
     df.to_excel(ruta_resultado, index=False, engine="openpyxl")
@@ -472,7 +475,8 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str) -> dict:
 
     # ── Exportar Excel con formato ─────────────────────────────────────────────
     carpeta        = os.path.dirname(ruta_facturas)
-    ruta_resultado = os.path.join(carpeta, "resultado_conciliacion.xlsx")
+    fecha_hoy      = datetime.date.today().strftime("%d-%m-%Y")
+    ruta_resultado = os.path.join(carpeta, f"conciliacion_Abanca_{fecha_hoy}.xlsx")
 
     df = df.map(_limpiar)
     df.to_excel(ruta_resultado, index=False, engine="openpyxl")
@@ -602,7 +606,7 @@ class App(tk.Tk):
         # ── Botón ejecutar ────────────────────────────────────────────────────
         self._btn_ejecutar = tk.Button(
             self,
-            text="Ejecutar conciliación  →",
+            text="Ejecutar conciliación con Bankinter  →",
             font=("Segoe UI", 11, "bold"),
             bg=f"#{BLUE_DARK}", fg="white",
             activebackground="#16375a", activeforeground="white",
@@ -670,6 +674,7 @@ class App(tk.Tk):
         banco_nombre = nombres.get(self._modo.get(), self._modo.get())
         self._lbl_banco.set(f"Extracto {banco_nombre}  (*.xlsx)")
         self._lbl_facturas.set("Facturas pendientes  (*.xls / .xlsx)")
+        self._btn_ejecutar.config(text=f"Ejecutar conciliación con {banco_nombre}  →")
 
     def _res_label(self, parent, texto: str, valor: str, fg: str = "#222"):
         frame = tk.Frame(parent, bg=BG)
