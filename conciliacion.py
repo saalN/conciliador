@@ -188,18 +188,169 @@ def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
     }
 
 
+def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
+    """
+    Cruza facturas (Nombre/Importe) contra extracto Bankinter.
+    Genera resultado_conciliacion.xlsx.
+    """
+    # ── Leer banco Bankinter (fila 6 = cabecera) ──────────────────────────────
+    banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
+    banco.columns = [c.strip() for c in banco.columns]
+
+    col_categoria   = "CATEGORÍA"
+    col_descripcion = "DESCRIPCIÓN"
+    col_haber       = "HABER"
+    col_fecha       = "FECHA CONTABLE"
+    col_referencia  = "REFERENCIA"
+
+    for col in (col_categoria, col_descripcion, col_haber, col_fecha, col_referencia):
+        if col not in banco.columns:
+            raise ValueError(
+                f"Columna no encontrada en el banco Bankinter: '{col}'\n"
+                f"Columnas disponibles: {list(banco.columns)}"
+            )
+
+    banco[col_haber] = (
+        banco[col_haber]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    banco[col_haber] = pd.to_numeric(banco[col_haber], errors="coerce")
+
+    # ── Leer facturas (fila 1 = cabecera) ────────────────────────────────────
+    ext = os.path.splitext(ruta_facturas)[1].lower()
+    if ext == ".xls":
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
+    else:
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas.columns = [c.strip() for c in facturas.columns]
+
+    col_nombre  = "Nombre"
+    col_importe = "Importe"
+
+    for col in (col_nombre, col_importe):
+        if col not in facturas.columns:
+            raise ValueError(
+                f"Columna no encontrada en facturas: '{col}'\n"
+                f"Columnas disponibles: {list(facturas.columns)}"
+            )
+
+    facturas[col_importe] = (
+        facturas[col_importe]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
+
+    # ── Solo facturas con importe positivo ────────────────────────────────────
+    df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+
+    # ── Banco: filtrar Transferencias / Recibos con HABER positivo ────────────
+    categorias_validas = {"transferencias", "recibos"}
+    banco_disponible = banco[
+        banco[col_categoria].fillna("").str.strip().str.lower().isin(categorias_validas) &
+        (banco[col_haber] > 0)
+    ].copy()
+
+    # ── Cruce ─────────────────────────────────────────────────────────────────
+    cobrada_flags = []
+    fechas_cobro  = []
+    referencias   = []
+
+    for _, fac in df.iterrows():
+        importe_fac = fac[col_importe]
+        nombre_norm = _normalizar(fac[col_nombre])
+
+        coincidencia = banco_disponible[
+            (banco_disponible[col_haber] == importe_fac) &
+            banco_disponible[col_descripcion].apply(
+                lambda x: nombre_norm in str(x).strip().lower()
+            )
+        ]
+
+        if not coincidencia.empty:
+            idx   = coincidencia.index[0]
+            row_b = banco_disponible.loc[idx]
+            cobrada_flags.append("SÍ")
+            fechas_cobro.append(row_b[col_fecha])
+            referencias.append(row_b[col_referencia])
+            banco_disponible = banco_disponible.drop(index=idx)
+        else:
+            cobrada_flags.append("NO")
+            fechas_cobro.append("")
+            referencias.append("")
+
+    df["COBRADA"]           = cobrada_flags
+    df["FECHA COBRO"]       = fechas_cobro
+    df["NRO. APUNTE BANCO"] = referencias
+
+    # ── Exportar Excel con formato ────────────────────────────────────────────
+    carpeta        = os.path.dirname(ruta_facturas)
+    ruta_resultado = os.path.join(carpeta, "resultado_conciliacion.xlsx")
+
+    df = df.map(_limpiar)
+    df.to_excel(ruta_resultado, index=False, engine="openpyxl")
+
+    wb = load_workbook(ruta_resultado)
+    ws = wb.active
+
+    header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
+    header_font = Font(bold=True, color="FFFFFF")
+    green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
+    red_fill    = PatternFill(fill_type="solid", fgColor=RED_FILL)
+
+    for cell in ws[1]:
+        cell.fill      = header_fill
+        cell.font      = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    cobrada_col_idx = df.columns.get_loc("COBRADA") + 1
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        cobrada_val = ws.cell(row=row[0].row, column=cobrada_col_idx).value
+        fill = green_fill if cobrada_val == "SÍ" else red_fill
+        for cell in row:
+            cell.fill = fill
+
+    for col_idx, col_cells in enumerate(ws.columns, start=1):
+        max_len = 0
+        for cell in col_cells:
+            try:
+                max_len = max(max_len, len(str(cell.value or "")))
+            except Exception:
+                pass
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 60)
+
+    wb.save(ruta_resultado)
+
+    # ── Estadísticas ──────────────────────────────────────────────────────────
+    n_total    = len(df)
+    cobradas   = df[df["COBRADA"] == "SÍ"]
+    pendientes = df[df["COBRADA"] == "NO"]
+
+    return {
+        "total":              n_total,
+        "cobradas":           len(cobradas),
+        "pendientes":         len(pendientes),
+        "importe_cobradas":   cobradas[col_importe].sum(),
+        "importe_pendientes": pendientes[col_importe].sum(),
+        "ruta_resultado":     ruta_resultado,
+    }
+
+
 # ── Interfaz gráfica ─────────────────────────────────────────────────────────
 
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Conciliación Bancaria")
-        self.geometry("520x560")
+        self.geometry("520x620")
         self.resizable(False, False)
         self.configure(bg=BG)
 
-        self._ruta_banco = tk.StringVar()
+        self._ruta_banco    = tk.StringVar()
         self._ruta_facturas = tk.StringVar()
+        self._modo          = tk.StringVar(value="bankinter")
 
         self._build_ui()
 
@@ -217,20 +368,37 @@ class App(tk.Tk):
         tk.Label(
             self, text="Cruza facturas pendientes con el extracto bancario",
             font=("Segoe UI", 9), bg=BG, fg="#666"
-        ).pack(pady=(0, 18))
+        ).pack(pady=(0, 12))
+
+        # ── Selector de formato ───────────────────────────────────────────────
+        frame_modo = tk.Frame(self, bg=BG)
+        frame_modo.pack(fill="x", padx=20, pady=(0, 14))
+        tk.Label(frame_modo, text="Banco:", font=("Segoe UI", 9, "bold"),
+                 bg=BG).pack(side="left", padx=(0, 10))
+        for texto, valor in [
+            ("Bankinter", "bankinter"),
+            ("Abanca",    "abanca"),
+            ("BBVA",      "bbva"),
+            ("La Caixa",  "lacaixa"),
+        ]:
+            tk.Radiobutton(
+                frame_modo, text=texto, variable=self._modo, value=valor,
+                font=("Segoe UI", 9), bg=BG, activebackground=BG,
+                command=self._actualizar_labels,
+            ).pack(side="left", padx=(0, 12))
 
         # ── Selector banco ────────────────────────────────────────────────────
-        self._selector_frame(
-            label="Extracto del banco  (Banco_*.xlsx)",
+        self._lbl_banco = tk.StringVar(value="Extracto Bankinter  (*.xlsx)")
+        self._selector_frame_var(
+            labelvar=self._lbl_banco,
             var=self._ruta_banco,
-            hint="Banco_*.xlsx",
         )
 
         # ── Selector facturas ─────────────────────────────────────────────────
-        self._selector_frame(
-            label="Facturas pendientes  (FACTURAS PTES_*.xls / .xlsx)",
+        self._lbl_facturas = tk.StringVar(value="Facturas pendientes  (*.xls / .xlsx)")
+        self._selector_frame_var(
+            labelvar=self._lbl_facturas,
             var=self._ruta_facturas,
-            hint="FACTURAS PTES_*.xls / .xlsx",
         )
 
         # ── Botón ejecutar ────────────────────────────────────────────────────
@@ -269,11 +437,11 @@ class App(tk.Tk):
         )
         self._lbl_estado.pack(pady=(8, 0))
 
-    def _selector_frame(self, label: str, var: tk.StringVar, hint: str):
+    def _selector_frame_var(self, labelvar: tk.StringVar, var: tk.StringVar):
         outer = tk.Frame(self, bg=BG)
         outer.pack(fill="x", padx=20, pady=(0, 10))
 
-        tk.Label(outer, text=label, font=("Segoe UI", 9, "bold"), bg=BG, anchor="w"
+        tk.Label(outer, textvariable=labelvar, font=("Segoe UI", 9, "bold"), bg=BG, anchor="w"
                  ).pack(fill="x")
 
         row = tk.Frame(outer, bg=BG)
@@ -292,6 +460,17 @@ class App(tk.Tk):
             cursor="hand2", padx=10,
             command=lambda v=var: self._elegir_fichero(v),
         ).pack(side="left", padx=(6, 0), ipady=5)
+
+    def _actualizar_labels(self):
+        nombres = {
+            "bankinter": "Bankinter",
+            "abanca":    "Abanca",
+            "bbva":      "BBVA",
+            "lacaixa":   "La Caixa",
+        }
+        banco_nombre = nombres.get(self._modo.get(), self._modo.get())
+        self._lbl_banco.set(f"Extracto {banco_nombre}  (*.xlsx)")
+        self._lbl_facturas.set("Facturas pendientes  (*.xls / .xlsx)")
 
     def _res_label(self, parent, texto: str, valor: str, fg: str = "#222"):
         frame = tk.Frame(parent, bg=BG)
@@ -333,13 +512,21 @@ class App(tk.Tk):
 
         threading.Thread(
             target=self._ejecutar_hilo,
-            args=(banco, facturas),
+            args=(banco, facturas, self._modo.get()),
             daemon=True,
         ).start()
 
-    def _ejecutar_hilo(self, banco: str, facturas: str):
+    def _ejecutar_hilo(self, banco: str, facturas: str, modo: str):
         try:
-            stats = conciliar(banco, facturas)
+            if modo == "bankinter":
+                stats = conciliar_bankinter(banco, facturas)
+            elif modo in ("abanca", "bbva", "lacaixa"):
+                nombres = {"abanca": "Abanca", "bbva": "BBVA", "lacaixa": "La Caixa"}
+                raise NotImplementedError(
+                    f"El formato {nombres[modo]} aún no está implementado."
+                )
+            else:
+                stats = conciliar(banco, facturas)
             self.after(0, self._mostrar_resultado, stats)
         except Exception as exc:
             self.after(0, self._mostrar_error, str(exc))
