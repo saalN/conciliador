@@ -19,7 +19,8 @@ from openpyxl.utils import get_column_letter
 BG = "#F8F8F6"
 BLUE_DARK = "1F4E79"
 GREEN_FILL = "C6EFCE"
-RED_FILL = "FFC7CE"
+RED_FILL   = "FFC7CE"
+AMBER_FILL = "FFEB9C"
 
 
 # ── Lógica de conciliación ───────────────────────────────────────────────────
@@ -42,6 +43,15 @@ def _limpiar(valor):
 def _normalizar(texto: str) -> str:
     """Devuelve los primeros 15 caracteres en minúsculas sin espacios extremos."""
     return str(texto).strip().lower()[:15]
+
+
+def _añadir_observaciones(df: pd.DataFrame, col_importe: str) -> pd.DataFrame:
+    """Marca con aviso las filas cuyo importe aparece más de una vez en las facturas."""
+    duplicados = df[col_importe].duplicated(keep=False)
+    df["OBSERVACIONES"] = duplicados.map(
+        lambda x: "⚠ Importe duplicado - revisar" if x else ""
+    )
+    return df
 
 
 def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
@@ -131,6 +141,8 @@ def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
     df["FECHA COBRO"] = fechas_cobro
     df["NRO. APUNTE BANCO"] = apuntes_banco
 
+    df = _añadir_observaciones(df, col_importe_fac)
+
     # ── Exportar Excel con formato ────────────────────────────────────────────
     carpeta = os.path.dirname(ruta_facturas)
     ruta_resultado = os.path.join(carpeta, "resultado_conciliacion.xlsx")
@@ -161,6 +173,17 @@ def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
         for cell in row:
             cell.fill = fill
 
+    # Celda OBSERVACIONES en ámbar si tiene aviso
+    if "OBSERVACIONES" in df.columns:
+        obs_col_idx = df.columns.get_loc("OBSERVACIONES") + 1
+        amber_fill = PatternFill(fill_type="solid", fgColor=AMBER_FILL)
+        amber_font = Font(bold=True, color="7D4800")
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=obs_col_idx)
+            if cell.value:
+                cell.fill = amber_fill
+                cell.font = amber_font
+
     # Autoajuste de columnas
     for col_idx, col_cells in enumerate(ws.columns, start=1):
         max_len = 0
@@ -177,6 +200,7 @@ def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
     n_total = len(df)
     cobradas = df[df["COBRADA"] == "SÍ"]
     pendientes = df[df["COBRADA"] == "NO"]
+    avisos = df[df["OBSERVACIONES"] != ""] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
 
     return {
         "total": n_total,
@@ -184,6 +208,7 @@ def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
         "pendientes": len(pendientes),
         "importe_cobradas": cobradas[col_importe_fac].sum(),
         "importe_pendientes": pendientes[col_importe_fac].sum(),
+        "avisos": len(avisos),
         "ruta_resultado": ruta_resultado,
     }
 
@@ -245,8 +270,8 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
     # ── Solo facturas con importe positivo ────────────────────────────────────
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
 
-    # ── Banco: filtrar Transferencias / Recibos con HABER positivo ────────────
-    categorias_validas = {"transferencias", "recibos"}
+    # ── Banco: filtrar solo Transferencias con HABER positivo ────────────────
+    categorias_validas = {"transferencias"}
     banco_disponible = banco[
         banco[col_categoria].fillna("").str.strip().str.lower().isin(categorias_validas) &
         (banco[col_haber] > 0)
@@ -259,13 +284,9 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
 
     for _, fac in df.iterrows():
         importe_fac = fac[col_importe]
-        nombre_norm = _normalizar(fac[col_nombre])
 
         coincidencia = banco_disponible[
-            (banco_disponible[col_haber] == importe_fac) &
-            banco_disponible[col_descripcion].apply(
-                lambda x: nombre_norm in str(x).strip().lower()
-            )
+            banco_disponible[col_haber] == importe_fac
         ]
 
         if not coincidencia.empty:
@@ -283,6 +304,8 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
     df["NRO. APUNTE BANCO"] = referencias
+
+    df = _añadir_observaciones(df, col_importe)
 
     # ── Exportar Excel con formato ────────────────────────────────────────────
     carpeta        = os.path.dirname(ruta_facturas)
@@ -312,6 +335,17 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
         for cell in row:
             cell.fill = fill
 
+    # Celda OBSERVACIONES en ámbar si tiene aviso
+    if "OBSERVACIONES" in df.columns:
+        obs_col_idx = df.columns.get_loc("OBSERVACIONES") + 1
+        amber_fill = PatternFill(fill_type="solid", fgColor=AMBER_FILL)
+        amber_font = Font(bold=True, color="7D4800")
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=obs_col_idx)
+            if cell.value:
+                cell.fill = amber_fill
+                cell.font = amber_font
+
     for col_idx, col_cells in enumerate(ws.columns, start=1):
         max_len = 0
         for cell in col_cells:
@@ -327,6 +361,7 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
     n_total    = len(df)
     cobradas   = df[df["COBRADA"] == "SÍ"]
     pendientes = df[df["COBRADA"] == "NO"]
+    avisos     = df[df["OBSERVACIONES"] != ""] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
 
     return {
         "total":              n_total,
@@ -334,6 +369,169 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
         "pendientes":         len(pendientes),
         "importe_cobradas":   cobradas[col_importe].sum(),
         "importe_pendientes": pendientes[col_importe].sum(),
+        "avisos":             len(avisos),
+        "ruta_resultado":     ruta_resultado,
+    }
+
+
+def conciliar_abanca(ruta_banco: str, ruta_facturas: str) -> dict:
+    """
+    Cruza facturas (Nombre/Importe) contra extracto Abanca.
+    Genera resultado_conciliacion.xlsx.
+    """
+    # ── Leer banco Abanca (fila 6 = cabecera) ─────────────────────────────────
+    banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
+    banco.columns = [c.strip() for c in banco.columns]
+
+    col_tipo_op   = "TIPO OPERACIÓN"
+    col_importe_b = "IMPORTE"
+    col_fecha     = "F. OPERACIÓN"
+    col_referencia = "REFERENCIA"
+
+    for col in (col_tipo_op, col_importe_b, col_fecha, col_referencia):
+        if col not in banco.columns:
+            raise ValueError(
+                f"Columna no encontrada en el banco Abanca: '{col}'\n"
+                f"Columnas disponibles: {list(banco.columns)}"
+            )
+
+    banco[col_importe_b] = (
+        banco[col_importe_b]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    banco[col_importe_b] = pd.to_numeric(banco[col_importe_b], errors="coerce")
+
+    # ── Leer facturas (fila 1 = cabecera) ─────────────────────────────────────
+    ext = os.path.splitext(ruta_facturas)[1].lower()
+    if ext == ".xls":
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
+    else:
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas.columns = [c.strip() for c in facturas.columns]
+
+    col_nombre  = "Nombre"
+    col_importe = "Importe"
+
+    for col in (col_nombre, col_importe):
+        if col not in facturas.columns:
+            raise ValueError(
+                f"Columna no encontrada en facturas: '{col}'\n"
+                f"Columnas disponibles: {list(facturas.columns)}"
+            )
+
+    facturas[col_importe] = (
+        facturas[col_importe]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
+
+    # ── Solo facturas con importe positivo ────────────────────────────────────
+    df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+
+    # ── Banco: filtrar transferencias con IMPORTE positivo ────────────────────
+    categorias_validas = {
+        "transferencias de otras entidades",
+        "transferencias propia entidad",
+    }
+    banco_disponible = banco[
+        banco[col_tipo_op].fillna("").str.strip().str.lower().isin(categorias_validas) &
+        (banco[col_importe_b] > 0)
+    ].copy()
+
+    # ── Cruce por importe exacto ───────────────────────────────────────────────
+    cobrada_flags = []
+    fechas_cobro  = []
+    referencias   = []
+
+    for _, fac in df.iterrows():
+        importe_fac = fac[col_importe]
+
+        coincidencia = banco_disponible[
+            banco_disponible[col_importe_b] == importe_fac
+        ]
+
+        if not coincidencia.empty:
+            idx   = coincidencia.index[0]
+            row_b = banco_disponible.loc[idx]
+            cobrada_flags.append("SÍ")
+            fechas_cobro.append(row_b[col_fecha])
+            referencias.append(row_b[col_referencia])
+            banco_disponible = banco_disponible.drop(index=idx)
+        else:
+            cobrada_flags.append("NO")
+            fechas_cobro.append("")
+            referencias.append("")
+
+    df["COBRADA"]           = cobrada_flags
+    df["FECHA COBRO"]       = fechas_cobro
+    df["NRO. APUNTE BANCO"] = referencias
+
+    df = _añadir_observaciones(df, col_importe)
+
+    # ── Exportar Excel con formato ─────────────────────────────────────────────
+    carpeta        = os.path.dirname(ruta_facturas)
+    ruta_resultado = os.path.join(carpeta, "resultado_conciliacion.xlsx")
+
+    df = df.map(_limpiar)
+    df.to_excel(ruta_resultado, index=False, engine="openpyxl")
+
+    wb = load_workbook(ruta_resultado)
+    ws = wb.active
+
+    header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
+    header_font = Font(bold=True, color="FFFFFF")
+    green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
+    red_fill    = PatternFill(fill_type="solid", fgColor=RED_FILL)
+
+    for cell in ws[1]:
+        cell.fill      = header_fill
+        cell.font      = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    cobrada_col_idx = df.columns.get_loc("COBRADA") + 1
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        cobrada_val = ws.cell(row=row[0].row, column=cobrada_col_idx).value
+        fill = green_fill if cobrada_val == "SÍ" else red_fill
+        for cell in row:
+            cell.fill = fill
+
+    if "OBSERVACIONES" in df.columns:
+        obs_col_idx = df.columns.get_loc("OBSERVACIONES") + 1
+        amber_fill = PatternFill(fill_type="solid", fgColor=AMBER_FILL)
+        amber_font = Font(bold=True, color="7D4800")
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=obs_col_idx)
+            if cell.value:
+                cell.fill = amber_fill
+                cell.font = amber_font
+
+    for col_idx, col_cells in enumerate(ws.columns, start=1):
+        max_len = 0
+        for cell in col_cells:
+            try:
+                max_len = max(max_len, len(str(cell.value or "")))
+            except Exception:
+                pass
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 60)
+
+    wb.save(ruta_resultado)
+
+    # ── Estadísticas ───────────────────────────────────────────────────────────
+    n_total    = len(df)
+    cobradas   = df[df["COBRADA"] == "SÍ"]
+    pendientes = df[df["COBRADA"] == "NO"]
+    avisos     = df[df["OBSERVACIONES"] != ""] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+
+    return {
+        "total":              n_total,
+        "cobradas":           len(cobradas),
+        "pendientes":         len(pendientes),
+        "importe_cobradas":   cobradas[col_importe].sum(),
+        "importe_pendientes": pendientes[col_importe].sum(),
+        "avisos":             len(avisos),
         "ruta_resultado":     ruta_resultado,
     }
 
@@ -426,6 +624,7 @@ class App(tk.Tk):
         self._lbl_pendientes = self._res_label(frame_res, "Pendientes:", "—", fg="#c0392b")
         self._lbl_imp_cob = self._res_label(frame_res, "Importe cobrado:", "—")
         self._lbl_imp_pen = self._res_label(frame_res, "Importe pendiente:", "—")
+        self._lbl_avisos = self._res_label(frame_res, "Avisos duplicados:", "—", fg="#7D4800")
 
         # ── Barra de progreso ─────────────────────────────────────────────────
         self._progress = ttk.Progressbar(self, mode="indeterminate", length=480)
@@ -520,8 +719,10 @@ class App(tk.Tk):
         try:
             if modo == "bankinter":
                 stats = conciliar_bankinter(banco, facturas)
-            elif modo in ("abanca", "bbva", "lacaixa"):
-                nombres = {"abanca": "Abanca", "bbva": "BBVA", "lacaixa": "La Caixa"}
+            elif modo == "abanca":
+                stats = conciliar_abanca(banco, facturas)
+            elif modo in ("bbva", "lacaixa"):
+                nombres = {"bbva": "BBVA", "lacaixa": "La Caixa"}
                 raise NotImplementedError(
                     f"El formato {nombres[modo]} aún no está implementado."
                 )
@@ -540,6 +741,8 @@ class App(tk.Tk):
         self._lbl_pendientes.config(text=str(stats["pendientes"]))
         self._lbl_imp_cob.config(text=f"{stats['importe_cobradas']:,.2f} €")
         self._lbl_imp_pen.config(text=f"{stats['importe_pendientes']:,.2f} €")
+        avisos = stats.get("avisos", 0)
+        self._lbl_avisos.config(text=str(avisos) if avisos == 0 else f"{avisos}  ⚠")
 
         self._lbl_estado.config(
             text=f"✔ Resultado guardado en: {stats['ruta_resultado']}",
