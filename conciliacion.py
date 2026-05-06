@@ -46,12 +46,12 @@ def _normalizar(texto: str) -> str:
     return str(texto).strip().lower()[:15]
 
 
-def _añadir_observaciones(df: pd.DataFrame, col_importe: str) -> pd.DataFrame:
+def _añadir_observaciones(df: pd.DataFrame, col_importe: str, col_factura: str = "Factura") -> pd.DataFrame:
     """Marca con aviso las filas con importe duplicado y/o número de factura duplicado."""
     dup_importe = df[col_importe].duplicated(keep=False)
     dup_factura = (
-        df["Factura"].duplicated(keep=False)
-        if "Factura" in df.columns
+        df[col_factura].duplicated(keep=False)
+        if col_factura in df.columns
         else pd.Series(False, index=df.index)
     )
 
@@ -908,6 +908,511 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str) -> dict:
     }
 
 
+# ── Funciones SIDI ───────────────────────────────────────────────────────────
+
+def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+    """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto Bankinter."""
+    banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
+    banco.columns = [c.strip() for c in banco.columns]
+
+    col_categoria   = "CATEGORÍA"
+    col_haber       = "HABER"
+    col_fecha       = "FECHA CONTABLE"
+    col_referencia  = "REFERENCIA"
+
+    for col in (col_categoria, col_haber, col_fecha, col_referencia):
+        if col not in banco.columns:
+            raise ValueError(
+                f"Columna no encontrada en el banco Bankinter: '{col}'\n"
+                f"Columnas disponibles: {list(banco.columns)}"
+            )
+
+    banco[col_haber] = (
+        banco[col_haber]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    banco[col_haber] = pd.to_numeric(banco[col_haber], errors="coerce")
+
+    ext = os.path.splitext(ruta_facturas)[1].lower()
+    if ext == ".xls":
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
+    else:
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas.columns = [c.strip() for c in facturas.columns]
+
+    col_nombre  = "Cliente/SubCliente"
+    col_importe = "Total"
+
+    for col in (col_nombre, col_importe):
+        if col not in facturas.columns:
+            raise ValueError(
+                f"Columna no encontrada en facturas SIDI: '{col}'\n"
+                f"Columnas disponibles: {list(facturas.columns)}"
+            )
+
+    facturas[col_importe] = (
+        facturas[col_importe]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
+
+    df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+
+    categorias_validas = {"transferencias"}
+    banco_disponible = banco[
+        banco[col_categoria].fillna("").str.strip().str.lower().isin(categorias_validas) &
+        (banco[col_haber] > 0)
+    ].copy()
+
+    cobrada_flags, fechas_cobro, referencias = [], [], []
+
+    for _, fac in df.iterrows():
+        coincidencia = banco_disponible[banco_disponible[col_haber] == fac[col_importe]]
+        if not coincidencia.empty:
+            idx = coincidencia.index[0]
+            row_b = banco_disponible.loc[idx]
+            cobrada_flags.append("SÍ")
+            fechas_cobro.append(row_b[col_fecha])
+            referencias.append(row_b[col_referencia])
+            banco_disponible = banco_disponible.drop(index=idx)
+        else:
+            cobrada_flags.append("NO")
+            fechas_cobro.append("")
+            referencias.append("")
+
+    df["COBRADA"]           = cobrada_flags
+    df["FECHA COBRO"]       = fechas_cobro
+    df["NRO. APUNTE BANCO"] = referencias
+
+    df = _añadir_observaciones(df, col_importe, col_factura="Código")
+    df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
+    for _col_fecha in ("Fecha", "F. Factura", "Fecha vto."):
+        if _col_fecha in df.columns:
+            df[_col_fecha] = df[_col_fecha].apply(_formatear_fecha)
+
+    carpeta        = os.path.dirname(ruta_facturas)
+    fecha_hoy      = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    ruta_resultado = os.path.join(carpeta, f"conciliacion_Bankinter_SIDI_{fecha_hoy}.xlsx")
+
+    df = df.map(_limpiar)
+    df.to_excel(ruta_resultado, index=False, engine="openpyxl")
+
+    wb = load_workbook(ruta_resultado)
+    ws = wb.active
+    header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
+    header_font = Font(bold=True, color="FFFFFF")
+    green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
+    red_fill    = PatternFill(fill_type="solid", fgColor=RED_FILL)
+    for cell in ws[1]:
+        cell.fill = header_fill; cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    cobrada_col_idx = df.columns.get_loc("COBRADA") + 1
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        fill = green_fill if ws.cell(row=row[0].row, column=cobrada_col_idx).value == "SÍ" else red_fill
+        for cell in row: cell.fill = fill
+    if "OBSERVACIONES" in df.columns:
+        obs_col_idx = df.columns.get_loc("OBSERVACIONES") + 1
+        amber_fill = PatternFill(fill_type="solid", fgColor=AMBER_FILL)
+        amber_font = Font(bold=True, color="7D4800")
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=obs_col_idx)
+            if cell.value: cell.fill = amber_fill; cell.font = amber_font
+    for col_idx, col_cells in enumerate(ws.columns, start=1):
+        max_len = max((len(str(c.value or "")) for c in col_cells), default=0)
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 60)
+    wb.save(ruta_resultado)
+
+    cobradas   = df[df["COBRADA"] == "SÍ"]
+    pendientes = df[df["COBRADA"] == "NO"]
+    dup_importe = df[df["OBSERVACIONES"].str.contains("Importe", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    dup_factura = df[df["OBSERVACIONES"].str.contains("factura", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    return {
+        "total": len(df), "cobradas": len(cobradas), "pendientes": len(pendientes),
+        "importe_cobradas": cobradas[col_importe].sum(),
+        "importe_pendientes": pendientes[col_importe].sum(),
+        "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
+        "ruta_resultado": ruta_resultado,
+    }
+
+
+def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+    """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto Abanca."""
+    banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
+    banco.columns = [c.strip() for c in banco.columns]
+
+    col_tipo_op    = "TIPO OPERACIÓN"
+    col_importe_b  = "IMPORTE"
+    col_fecha      = "F. OPERACIÓN"
+    col_referencia = "REFERENCIA"
+
+    for col in (col_tipo_op, col_importe_b, col_fecha, col_referencia):
+        if col not in banco.columns:
+            raise ValueError(
+                f"Columna no encontrada en el banco Abanca: '{col}'\n"
+                f"Columnas disponibles: {list(banco.columns)}"
+            )
+
+    banco[col_importe_b] = (
+        banco[col_importe_b]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    banco[col_importe_b] = pd.to_numeric(banco[col_importe_b], errors="coerce")
+
+    ext = os.path.splitext(ruta_facturas)[1].lower()
+    if ext == ".xls":
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
+    else:
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas.columns = [c.strip() for c in facturas.columns]
+
+    col_nombre  = "Cliente/SubCliente"
+    col_importe = "Total"
+
+    for col in (col_nombre, col_importe):
+        if col not in facturas.columns:
+            raise ValueError(
+                f"Columna no encontrada en facturas SIDI: '{col}'\n"
+                f"Columnas disponibles: {list(facturas.columns)}"
+            )
+
+    facturas[col_importe] = (
+        facturas[col_importe]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
+
+    df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+
+    categorias_validas = {
+        "transferencias de otras entidades",
+        "transferencias propia entidad",
+    }
+    banco_disponible = banco[
+        banco[col_tipo_op].fillna("").str.strip().str.lower().isin(categorias_validas) &
+        (banco[col_importe_b] > 0)
+    ].copy()
+
+    cobrada_flags, fechas_cobro, referencias = [], [], []
+
+    for _, fac in df.iterrows():
+        coincidencia = banco_disponible[banco_disponible[col_importe_b] == fac[col_importe]]
+        if not coincidencia.empty:
+            idx = coincidencia.index[0]
+            row_b = banco_disponible.loc[idx]
+            cobrada_flags.append("SÍ")
+            fechas_cobro.append(row_b[col_fecha])
+            referencias.append(row_b[col_referencia])
+            banco_disponible = banco_disponible.drop(index=idx)
+        else:
+            cobrada_flags.append("NO")
+            fechas_cobro.append("")
+            referencias.append("")
+
+    df["COBRADA"]           = cobrada_flags
+    df["FECHA COBRO"]       = fechas_cobro
+    df["NRO. APUNTE BANCO"] = referencias
+
+    df = _añadir_observaciones(df, col_importe, col_factura="Código")
+    df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
+    for _col_fecha in ("Fecha", "F. Factura", "Fecha vto."):
+        if _col_fecha in df.columns:
+            df[_col_fecha] = df[_col_fecha].apply(_formatear_fecha)
+
+    carpeta        = os.path.dirname(ruta_facturas)
+    fecha_hoy      = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    ruta_resultado = os.path.join(carpeta, f"conciliacion_Abanca_SIDI_{fecha_hoy}.xlsx")
+
+    df = df.map(_limpiar)
+    df.to_excel(ruta_resultado, index=False, engine="openpyxl")
+
+    wb = load_workbook(ruta_resultado)
+    ws = wb.active
+    header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
+    header_font = Font(bold=True, color="FFFFFF")
+    green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
+    red_fill    = PatternFill(fill_type="solid", fgColor=RED_FILL)
+    for cell in ws[1]:
+        cell.fill = header_fill; cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    cobrada_col_idx = df.columns.get_loc("COBRADA") + 1
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        fill = green_fill if ws.cell(row=row[0].row, column=cobrada_col_idx).value == "SÍ" else red_fill
+        for cell in row: cell.fill = fill
+    if "OBSERVACIONES" in df.columns:
+        obs_col_idx = df.columns.get_loc("OBSERVACIONES") + 1
+        amber_fill = PatternFill(fill_type="solid", fgColor=AMBER_FILL)
+        amber_font = Font(bold=True, color="7D4800")
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=obs_col_idx)
+            if cell.value: cell.fill = amber_fill; cell.font = amber_font
+    for col_idx, col_cells in enumerate(ws.columns, start=1):
+        max_len = max((len(str(c.value or "")) for c in col_cells), default=0)
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 60)
+    wb.save(ruta_resultado)
+
+    cobradas   = df[df["COBRADA"] == "SÍ"]
+    pendientes = df[df["COBRADA"] == "NO"]
+    dup_importe = df[df["OBSERVACIONES"].str.contains("Importe", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    dup_factura = df[df["OBSERVACIONES"].str.contains("factura", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    return {
+        "total": len(df), "cobradas": len(cobradas), "pendientes": len(pendientes),
+        "importe_cobradas": cobradas[col_importe].sum(),
+        "importe_pendientes": pendientes[col_importe].sum(),
+        "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
+        "ruta_resultado": ruta_resultado,
+    }
+
+
+def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+    """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto La Caixa."""
+    banco = pd.read_excel(ruta_banco, dtype=str, skiprows=3, header=None)
+
+    if banco.shape[1] < 5:
+        raise ValueError(
+            f"El extracto de La Caixa debe tener al menos 5 columnas. "
+            f"Se encontraron {banco.shape[1]}."
+        )
+
+    COL_FECHA   = 1
+    COL_DESC    = 3
+    COL_IMPORTE = 4
+
+    banco[COL_IMPORTE] = (
+        banco[COL_IMPORTE]
+        .astype(str)
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    banco[COL_IMPORTE] = pd.to_numeric(banco[COL_IMPORTE], errors="coerce")
+
+    ext = os.path.splitext(ruta_facturas)[1].lower()
+    if ext == ".xls":
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
+    else:
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas.columns = [c.strip() for c in facturas.columns]
+
+    col_nombre  = "Cliente/SubCliente"
+    col_importe = "Total"
+
+    for col in (col_nombre, col_importe):
+        if col not in facturas.columns:
+            raise ValueError(
+                f"Columna no encontrada en facturas SIDI: '{col}'\n"
+                f"Columnas disponibles: {list(facturas.columns)}"
+            )
+
+    facturas[col_importe] = (
+        facturas[col_importe]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
+
+    df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    banco_disponible = banco[banco[COL_IMPORTE] > 0].copy()
+
+    cobrada_flags, fechas_cobro, referencias = [], [], []
+
+    for _, fac in df.iterrows():
+        coincidencia = banco_disponible[banco_disponible[COL_IMPORTE] == fac[col_importe]]
+        if not coincidencia.empty:
+            idx = coincidencia.index[0]
+            row_b = banco_disponible.loc[idx]
+            cobrada_flags.append("SÍ")
+            fechas_cobro.append(row_b[COL_FECHA])
+            referencias.append(row_b[COL_DESC])
+            banco_disponible = banco_disponible.drop(index=idx)
+        else:
+            cobrada_flags.append("NO")
+            fechas_cobro.append("")
+            referencias.append("")
+
+    df["COBRADA"]           = cobrada_flags
+    df["FECHA COBRO"]       = fechas_cobro
+    df["NRO. APUNTE BANCO"] = referencias
+
+    df = _añadir_observaciones(df, col_importe, col_factura="Código")
+    df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
+    for _col_fecha in ("Fecha", "F. Factura", "Fecha vto."):
+        if _col_fecha in df.columns:
+            df[_col_fecha] = df[_col_fecha].apply(_formatear_fecha)
+
+    carpeta        = os.path.dirname(ruta_facturas)
+    fecha_hoy      = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    ruta_resultado = os.path.join(carpeta, f"conciliacion_LaCaixa_SIDI_{fecha_hoy}.xlsx")
+
+    df = df.map(_limpiar)
+    df.to_excel(ruta_resultado, index=False, engine="openpyxl")
+
+    wb = load_workbook(ruta_resultado)
+    ws = wb.active
+    header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
+    header_font = Font(bold=True, color="FFFFFF")
+    green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
+    red_fill    = PatternFill(fill_type="solid", fgColor=RED_FILL)
+    for cell in ws[1]:
+        cell.fill = header_fill; cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    cobrada_col_idx = df.columns.get_loc("COBRADA") + 1
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        fill = green_fill if ws.cell(row=row[0].row, column=cobrada_col_idx).value == "SÍ" else red_fill
+        for cell in row: cell.fill = fill
+    if "OBSERVACIONES" in df.columns:
+        obs_col_idx = df.columns.get_loc("OBSERVACIONES") + 1
+        amber_fill = PatternFill(fill_type="solid", fgColor=AMBER_FILL)
+        amber_font = Font(bold=True, color="7D4800")
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=obs_col_idx)
+            if cell.value: cell.fill = amber_fill; cell.font = amber_font
+    for col_idx, col_cells in enumerate(ws.columns, start=1):
+        max_len = max((len(str(c.value or "")) for c in col_cells), default=0)
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 60)
+    wb.save(ruta_resultado)
+
+    cobradas   = df[df["COBRADA"] == "SÍ"]
+    pendientes = df[df["COBRADA"] == "NO"]
+    dup_importe = df[df["OBSERVACIONES"].str.contains("Importe", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    dup_factura = df[df["OBSERVACIONES"].str.contains("factura", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    return {
+        "total": len(df), "cobradas": len(cobradas), "pendientes": len(pendientes),
+        "importe_cobradas": cobradas[col_importe].sum(),
+        "importe_pendientes": pendientes[col_importe].sum(),
+        "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
+        "ruta_resultado": ruta_resultado,
+    }
+
+
+def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+    """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto BBVA."""
+    banco = pd.read_excel(ruta_banco, dtype=str, skiprows=15)
+    banco.columns = [c.strip() for c in banco.columns]
+
+    col_fecha        = "F. CONTABLE"
+    col_concepto     = "CONCEPTO"
+    col_beneficiario = "BENEFICIARIO/ORDENANTE"
+    col_importe_b    = "IMPORTE"
+
+    for col in (col_fecha, col_concepto, col_beneficiario, col_importe_b):
+        if col not in banco.columns:
+            raise ValueError(
+                f"Columna no encontrada en el banco BBVA: '{col}'\n"
+                f"Columnas disponibles: {list(banco.columns)}"
+            )
+
+    banco[col_importe_b] = (
+        banco[col_importe_b]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    banco[col_importe_b] = pd.to_numeric(banco[col_importe_b], errors="coerce")
+
+    ext = os.path.splitext(ruta_facturas)[1].lower()
+    if ext == ".xls":
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
+    else:
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas.columns = [c.strip() for c in facturas.columns]
+
+    col_nombre  = "Cliente/SubCliente"
+    col_importe = "Total"
+
+    for col in (col_nombre, col_importe):
+        if col not in facturas.columns:
+            raise ValueError(
+                f"Columna no encontrada en facturas SIDI: '{col}'\n"
+                f"Columnas disponibles: {list(facturas.columns)}"
+            )
+
+    facturas[col_importe] = (
+        facturas[col_importe]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
+
+    df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+
+    banco_disponible = banco[
+        banco[col_concepto].fillna("").str.strip().str.lower().str.contains("transferencia", regex=False) &
+        (banco[col_importe_b] > 0)
+    ].copy()
+
+    cobrada_flags, fechas_cobro, referencias = [], [], []
+
+    for _, fac in df.iterrows():
+        coincidencia = banco_disponible[banco_disponible[col_importe_b] == fac[col_importe]]
+        if not coincidencia.empty:
+            idx = coincidencia.index[0]
+            row_b = banco_disponible.loc[idx]
+            cobrada_flags.append("SÍ")
+            fechas_cobro.append(row_b[col_fecha])
+            referencias.append(row_b[col_beneficiario])
+            banco_disponible = banco_disponible.drop(index=idx)
+        else:
+            cobrada_flags.append("NO")
+            fechas_cobro.append("")
+            referencias.append("")
+
+    df["COBRADA"]           = cobrada_flags
+    df["FECHA COBRO"]       = fechas_cobro
+    df["NRO. APUNTE BANCO"] = referencias
+
+    df = _añadir_observaciones(df, col_importe, col_factura="Código")
+    df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
+    for _col_fecha in ("Fecha", "F. Factura", "Fecha vto."):
+        if _col_fecha in df.columns:
+            df[_col_fecha] = df[_col_fecha].apply(_formatear_fecha)
+
+    carpeta        = os.path.dirname(ruta_facturas)
+    fecha_hoy      = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    ruta_resultado = os.path.join(carpeta, f"conciliacion_BBVA_SIDI_{fecha_hoy}.xlsx")
+
+    df = df.map(_limpiar)
+    df.to_excel(ruta_resultado, index=False, engine="openpyxl")
+
+    wb = load_workbook(ruta_resultado)
+    ws = wb.active
+    header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
+    header_font = Font(bold=True, color="FFFFFF")
+    green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
+    red_fill    = PatternFill(fill_type="solid", fgColor=RED_FILL)
+    for cell in ws[1]:
+        cell.fill = header_fill; cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    cobrada_col_idx = df.columns.get_loc("COBRADA") + 1
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        fill = green_fill if ws.cell(row=row[0].row, column=cobrada_col_idx).value == "SÍ" else red_fill
+        for cell in row: cell.fill = fill
+    if "OBSERVACIONES" in df.columns:
+        obs_col_idx = df.columns.get_loc("OBSERVACIONES") + 1
+        amber_fill = PatternFill(fill_type="solid", fgColor=AMBER_FILL)
+        amber_font = Font(bold=True, color="7D4800")
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=obs_col_idx)
+            if cell.value: cell.fill = amber_fill; cell.font = amber_font
+    for col_idx, col_cells in enumerate(ws.columns, start=1):
+        max_len = max((len(str(c.value or "")) for c in col_cells), default=0)
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 60)
+    wb.save(ruta_resultado)
+
+    cobradas   = df[df["COBRADA"] == "SÍ"]
+    pendientes = df[df["COBRADA"] == "NO"]
+    dup_importe = df[df["OBSERVACIONES"].str.contains("Importe", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    dup_factura = df[df["OBSERVACIONES"].str.contains("factura", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    return {
+        "total": len(df), "cobradas": len(cobradas), "pendientes": len(pendientes),
+        "importe_cobradas": cobradas[col_importe].sum(),
+        "importe_pendientes": pendientes[col_importe].sum(),
+        "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
+        "ruta_resultado": ruta_resultado,
+    }
+
+
 # ── Interfaz gráfica ─────────────────────────────────────────────────────────
 
 class App(tk.Tk):
@@ -918,9 +1423,10 @@ class App(tk.Tk):
         self.resizable(True, True)
         self.configure(bg=BG)
 
-        self._ruta_banco    = tk.StringVar()
-        self._ruta_facturas = tk.StringVar()
-        self._modo          = tk.StringVar(value="bankinter")
+        self._ruta_banco      = tk.StringVar()
+        self._ruta_facturas   = tk.StringVar()
+        self._modo            = tk.StringVar(value="bankinter")
+        self._tipo_listado    = tk.StringVar(value="pancho")
 
         self._build_ui()
 
@@ -957,6 +1463,21 @@ class App(tk.Tk):
                 command=self._actualizar_labels,
             ).pack(side="left", padx=(0, 12))
 
+        # ── Selector tipo listado ──────────────────────────────────────────────
+        frame_listado = tk.Frame(self, bg=BG)
+        frame_listado.pack(fill="x", padx=20, pady=(0, 14))
+        tk.Label(frame_listado, text="Listado:", font=("Segoe UI", 9, "bold"),
+                 bg=BG).pack(side="left", padx=(0, 10))
+        for texto, valor in [
+            ("Pancho", "pancho"),
+            ("SIDI",   "sidi"),
+        ]:
+            tk.Radiobutton(
+                frame_listado, text=texto, variable=self._tipo_listado, value=valor,
+                font=("Segoe UI", 9), bg=BG, activebackground=BG,
+                command=self._actualizar_labels,
+            ).pack(side="left", padx=(0, 12))
+
         # ── Selector banco ────────────────────────────────────────────────────
         self._lbl_banco = tk.StringVar(value="Extracto Bankinter  (*.xlsx)")
         self._selector_frame_var(
@@ -974,7 +1495,7 @@ class App(tk.Tk):
         # ── Botón ejecutar ────────────────────────────────────────────────────
         self._btn_ejecutar = tk.Button(
             self,
-            text="Ejecutar conciliación con Bankinter  →",
+            text="Ejecutar conciliación Bankinter · Pancho  →",
             font=("Segoe UI", 11, "bold"),
             bg=f"#{BLUE_DARK}", fg="white",
             activebackground="#16375a", activeforeground="white",
@@ -1040,10 +1561,13 @@ class App(tk.Tk):
             "bbva":      "BBVA",
             "lacaixa":   "La Caixa",
         }
-        banco_nombre = nombres.get(self._modo.get(), self._modo.get())
+        banco_nombre   = nombres.get(self._modo.get(), self._modo.get())
+        listado_nombre = "SIDI" if self._tipo_listado.get() == "sidi" else "Pancho"
         self._lbl_banco.set(f"Extracto {banco_nombre}  (*.xlsx)")
-        self._lbl_facturas.set("Facturas pendientes  (*.xls / .xlsx)")
-        self._btn_ejecutar.config(text=f"Ejecutar conciliación con {banco_nombre}  →")
+        self._lbl_facturas.set(f"Facturas pendientes {listado_nombre}  (*.xls / .xlsx)")
+        self._btn_ejecutar.config(
+            text=f"Ejecutar conciliación {banco_nombre} · {listado_nombre}  →"
+        )
 
     def _res_label(self, parent, texto: str, valor: str, fg: str = "#222"):
         frame = tk.Frame(parent, bg=BG)
@@ -1085,22 +1609,34 @@ class App(tk.Tk):
 
         threading.Thread(
             target=self._ejecutar_hilo,
-            args=(banco, facturas, self._modo.get()),
+            args=(banco, facturas, self._modo.get(), self._tipo_listado.get()),
             daemon=True,
         ).start()
 
-    def _ejecutar_hilo(self, banco: str, facturas: str, modo: str):
+    def _ejecutar_hilo(self, banco: str, facturas: str, modo: str, tipo_listado: str):
         try:
-            if modo == "bankinter":
-                stats = conciliar_bankinter(banco, facturas)
-            elif modo == "abanca":
-                stats = conciliar_abanca(banco, facturas)
-            elif modo == "lacaixa":
-                stats = conciliar_lacaixa(banco, facturas)
-            elif modo == "bbva":
-                stats = conciliar_bbva(banco, facturas)
+            if tipo_listado == "sidi":
+                if modo == "bankinter":
+                    stats = conciliar_bankinter_sidi(banco, facturas)
+                elif modo == "abanca":
+                    stats = conciliar_abanca_sidi(banco, facturas)
+                elif modo == "lacaixa":
+                    stats = conciliar_lacaixa_sidi(banco, facturas)
+                elif modo == "bbva":
+                    stats = conciliar_bbva_sidi(banco, facturas)
+                else:
+                    stats = conciliar_bankinter_sidi(banco, facturas)
             else:
-                stats = conciliar(banco, facturas)
+                if modo == "bankinter":
+                    stats = conciliar_bankinter(banco, facturas)
+                elif modo == "abanca":
+                    stats = conciliar_abanca(banco, facturas)
+                elif modo == "lacaixa":
+                    stats = conciliar_lacaixa(banco, facturas)
+                elif modo == "bbva":
+                    stats = conciliar_bbva(banco, facturas)
+                else:
+                    stats = conciliar(banco, facturas)
             self.after(0, self._mostrar_resultado, stats)
         except Exception as exc:
             self.after(0, self._mostrar_error, str(exc))
