@@ -68,13 +68,31 @@ def _añadir_observaciones(df: pd.DataFrame, col_importe: str, col_factura: str 
 
 
 def _formatear_fecha(valor) -> str:
-    """Convierte una fecha al formato DD/MM/YYYY. Si no puede parsearla, devuelve el valor original."""
+    """Convierte una fecha al formato DD/MM/YYYY usando formatos explícitos para evitar
+    la ambigüedad de dayfirst en pandas (que no es estricto en versiones recientes)."""
     if not valor or str(valor).strip() == "":
         return ""
-    try:
-        return pd.to_datetime(str(valor), dayfirst=True, errors="raise").strftime("%d/%m/%Y")
-    except Exception:
-        return str(valor)
+    # Si ya es un objeto date/datetime, formatear directamente sin re-parsear
+    if isinstance(valor, (datetime.date, datetime.datetime)):
+        return valor.strftime("%d/%m/%Y")
+    s = str(valor).strip()
+    # Probar formatos explícitos en orden: DD/MM/YYYY primero
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.datetime.strptime(s, fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    return s
+
+
+def _aplicar_formato_texto_fechas(ws, df: pd.DataFrame) -> None:
+    """Marca como texto (@) las columnas de fecha para evitar que LibreOffice
+    las auto-convierta al abrir el archivo y muestre el formato MM/DD en edición."""
+    cols_fecha = [c for c in df.columns if "fecha" in c.lower() or c == "Fecha"]
+    for col_name in cols_fecha:
+        col_idx = df.columns.get_loc(col_name) + 1
+        for row_idx in range(1, ws.max_row + 1):
+            ws.cell(row=row_idx, column=col_idx).number_format = "@"
 
 
 def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
@@ -180,6 +198,7 @@ def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
 
     wb = load_workbook(ruta_resultado)
     ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
 
     header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
     header_font = Font(bold=True, color="FFFFFF")
@@ -351,6 +370,7 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
 
     wb = load_workbook(ruta_resultado)
     ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
 
     header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
     header_font = Font(bold=True, color="FFFFFF")
@@ -521,6 +541,7 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str) -> dict:
 
     wb = load_workbook(ruta_resultado)
     ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
 
     header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
     header_font = Font(bold=True, color="FFFFFF")
@@ -683,6 +704,7 @@ def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str) -> dict:
 
     wb = load_workbook(ruta_resultado)
     ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
 
     header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
     header_font = Font(bold=True, color="FFFFFF")
@@ -849,6 +871,7 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str) -> dict:
 
     wb = load_workbook(ruta_resultado)
     ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
 
     header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
     header_font = Font(bold=True, color="FFFFFF")
@@ -1001,6 +1024,7 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
 
     wb = load_workbook(ruta_resultado)
     ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
     header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
     header_font = Font(bold=True, color="FFFFFF")
     green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
@@ -1131,6 +1155,7 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
 
     wb = load_workbook(ruta_resultado)
     ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
     header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
     header_font = Font(bold=True, color="FFFFFF")
     green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
@@ -1251,6 +1276,7 @@ def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
 
     wb = load_workbook(ruta_resultado)
     ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
     header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
     header_font = Font(bold=True, color="FFFFFF")
     green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
@@ -1284,6 +1310,170 @@ def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
         "ruta_resultado": ruta_resultado,
+    }
+
+
+def conciliar_unicaja(ruta_banco: str, ruta_facturas: str) -> dict:
+    """
+    Cruza facturas (Nombre/Importe) contra extracto Unicaja.
+    El extracto tiene 10 filas de cabecera; los datos empiezan en la fila 11.
+    Columnas: Fecha de operación, Fecha valor, Concepto, Importe, Divisa, Saldo, Divisa, Nº mov, Oficina.
+    Genera conciliacion_Unicaja_DD-MM-YYYY_HH-MM-SS.xlsx.
+    """
+    # ── Leer banco Unicaja (cabecera en fila 11) ──────────────────────────────
+    banco = pd.read_excel(ruta_banco, dtype=str, skiprows=10)
+    banco.columns = [c.strip() for c in banco.columns]
+
+    col_fecha    = "Fecha de operación"
+    col_importe_b = "Importe"
+    col_nmov     = "Nº mov"
+
+    for col in (col_fecha, col_importe_b, col_nmov):
+        if col not in banco.columns:
+            raise ValueError(
+                f"Columna no encontrada en el banco Unicaja: '{col}'\n"
+                f"Columnas disponibles: {list(banco.columns)}"
+            )
+
+    banco[col_importe_b] = (
+        banco[col_importe_b]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    banco[col_importe_b] = pd.to_numeric(banco[col_importe_b], errors="coerce")
+
+    # ── Leer facturas (fila 1 = cabecera) ─────────────────────────────────────
+    ext = os.path.splitext(ruta_facturas)[1].lower()
+    if ext == ".xls":
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
+    else:
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas.columns = [c.strip() for c in facturas.columns]
+
+    col_nombre  = "Nombre"
+    col_importe = "Importe"
+
+    for col in (col_nombre, col_importe):
+        if col not in facturas.columns:
+            raise ValueError(
+                f"Columna no encontrada en facturas: '{col}'\n"
+                f"Columnas disponibles: {list(facturas.columns)}"
+            )
+
+    facturas[col_importe] = (
+        facturas[col_importe]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
+
+    # ── Solo facturas con importe positivo ────────────────────────────────────
+    df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+
+    # ── Banco: solo movimientos con IMPORTE positivo ──────────────────────────
+    banco_disponible = banco[banco[col_importe_b] > 0].copy()
+
+    # ── Cruce por importe exacto ───────────────────────────────────────────────
+    cobrada_flags = []
+    fechas_cobro  = []
+    referencias   = []
+
+    for _, fac in df.iterrows():
+        importe_fac = fac[col_importe]
+
+        coincidencia = banco_disponible[
+            banco_disponible[col_importe_b] == importe_fac
+        ]
+
+        if not coincidencia.empty:
+            idx   = coincidencia.index[0]
+            row_b = banco_disponible.loc[idx]
+            cobrada_flags.append("SÍ")
+            fechas_cobro.append(row_b[col_fecha])
+            referencias.append(row_b[col_nmov])
+            banco_disponible = banco_disponible.drop(index=idx)
+        else:
+            cobrada_flags.append("NO")
+            fechas_cobro.append("")
+            referencias.append("")
+
+    df["COBRADA"]           = cobrada_flags
+    df["FECHA COBRO"]       = fechas_cobro
+    df["NRO. APUNTE BANCO"] = referencias
+
+    df = _añadir_observaciones(df, col_importe)
+    df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
+    for _col_fecha in ("F. Factura", "Fecha vto."):
+        if _col_fecha in df.columns:
+            df[_col_fecha] = df[_col_fecha].apply(_formatear_fecha)
+
+    # ── Exportar Excel con formato ─────────────────────────────────────────────
+    carpeta        = os.path.dirname(ruta_facturas)
+    fecha_hoy      = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    ruta_resultado = os.path.join(carpeta, f"conciliacion_Unicaja_{fecha_hoy}.xlsx")
+
+    df = df.map(_limpiar)
+    df.to_excel(ruta_resultado, index=False, engine="openpyxl")
+
+    wb = load_workbook(ruta_resultado)
+    ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
+
+    header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
+    header_font = Font(bold=True, color="FFFFFF")
+    green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
+    red_fill    = PatternFill(fill_type="solid", fgColor=RED_FILL)
+
+    for cell in ws[1]:
+        cell.fill      = header_fill
+        cell.font      = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    cobrada_col_idx = df.columns.get_loc("COBRADA") + 1
+
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        cobrada_val = ws.cell(row=row[0].row, column=cobrada_col_idx).value
+        fill = green_fill if cobrada_val == "SÍ" else red_fill
+        for cell in row:
+            cell.fill = fill
+
+    if "OBSERVACIONES" in df.columns:
+        obs_col_idx = df.columns.get_loc("OBSERVACIONES") + 1
+        amber_fill  = PatternFill(fill_type="solid", fgColor=AMBER_FILL)
+        amber_font  = Font(bold=True, color="7D4800")
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=obs_col_idx)
+            if cell.value:
+                cell.fill = amber_fill
+                cell.font = amber_font
+
+    for col_idx, col_cells in enumerate(ws.columns, start=1):
+        max_len = 0
+        for cell in col_cells:
+            try:
+                max_len = max(max_len, len(str(cell.value or "")))
+            except Exception:
+                pass
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 60)
+
+    wb.save(ruta_resultado)
+
+    # ── Estadísticas ───────────────────────────────────────────────────────────
+    n_total    = len(df)
+    cobradas   = df[df["COBRADA"] == "SÍ"]
+    pendientes = df[df["COBRADA"] == "NO"]
+    dup_importe = df[df["OBSERVACIONES"].str.contains("Importe", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    dup_factura = df[df["OBSERVACIONES"].str.contains("factura", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+
+    return {
+        "total":              n_total,
+        "cobradas":           len(cobradas),
+        "pendientes":         len(pendientes),
+        "importe_cobradas":   cobradas[col_importe].sum(),
+        "importe_pendientes": pendientes[col_importe].sum(),
+        "avisos_importe":     len(dup_importe),
+        "avisos_factura":     len(dup_factura),
+        "ruta_resultado":     ruta_resultado,
     }
 
 
@@ -1377,6 +1567,131 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
 
     wb = load_workbook(ruta_resultado)
     ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
+    header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
+    header_font = Font(bold=True, color="FFFFFF")
+    green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
+    red_fill    = PatternFill(fill_type="solid", fgColor=RED_FILL)
+    for cell in ws[1]:
+        cell.fill = header_fill; cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    cobrada_col_idx = df.columns.get_loc("COBRADA") + 1
+    for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+        fill = green_fill if ws.cell(row=row[0].row, column=cobrada_col_idx).value == "SÍ" else red_fill
+        for cell in row: cell.fill = fill
+    if "OBSERVACIONES" in df.columns:
+        obs_col_idx = df.columns.get_loc("OBSERVACIONES") + 1
+        amber_fill = PatternFill(fill_type="solid", fgColor=AMBER_FILL)
+        amber_font = Font(bold=True, color="7D4800")
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=obs_col_idx)
+            if cell.value: cell.fill = amber_fill; cell.font = amber_font
+    for col_idx, col_cells in enumerate(ws.columns, start=1):
+        max_len = max((len(str(c.value or "")) for c in col_cells), default=0)
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 60)
+    wb.save(ruta_resultado)
+
+    cobradas   = df[df["COBRADA"] == "SÍ"]
+    pendientes = df[df["COBRADA"] == "NO"]
+    dup_importe = df[df["OBSERVACIONES"].str.contains("Importe", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    dup_factura = df[df["OBSERVACIONES"].str.contains("factura", na=False)] if "OBSERVACIONES" in df.columns else df.iloc[0:0]
+    return {
+        "total": len(df), "cobradas": len(cobradas), "pendientes": len(pendientes),
+        "importe_cobradas": cobradas[col_importe].sum(),
+        "importe_pendientes": pendientes[col_importe].sum(),
+        "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
+        "ruta_resultado": ruta_resultado,
+    }
+
+
+def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+    """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto Unicaja."""
+    # ── Leer banco Unicaja (cabecera en fila 11) ──────────────────────────────
+    banco = pd.read_excel(ruta_banco, dtype=str, skiprows=10)
+    banco.columns = [c.strip() for c in banco.columns]
+
+    col_fecha     = "Fecha de operación"
+    col_importe_b = "Importe"
+    col_nmov      = "Nº mov"
+
+    for col in (col_fecha, col_importe_b, col_nmov):
+        if col not in banco.columns:
+            raise ValueError(
+                f"Columna no encontrada en el banco Unicaja: '{col}'\n"
+                f"Columnas disponibles: {list(banco.columns)}"
+            )
+
+    banco[col_importe_b] = (
+        banco[col_importe_b]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    banco[col_importe_b] = pd.to_numeric(banco[col_importe_b], errors="coerce")
+
+    # ── Leer facturas SIDI (fila 1 = cabecera) ────────────────────────────────
+    ext = os.path.splitext(ruta_facturas)[1].lower()
+    if ext == ".xls":
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
+    else:
+        facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas.columns = [c.strip() for c in facturas.columns]
+
+    col_nombre  = "Cliente/SubCliente"
+    col_importe = "Total"
+
+    for col in (col_nombre, col_importe):
+        if col not in facturas.columns:
+            raise ValueError(
+                f"Columna no encontrada en facturas SIDI: '{col}'\n"
+                f"Columnas disponibles: {list(facturas.columns)}"
+            )
+
+    facturas[col_importe] = (
+        facturas[col_importe]
+        .str.replace(",", ".", regex=False)
+        .str.replace(r"[^\d.\-]", "", regex=True)
+    )
+    facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
+
+    df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    banco_disponible = banco[banco[col_importe_b] > 0].copy()
+
+    cobrada_flags, fechas_cobro, referencias = [], [], []
+
+    for _, fac in df.iterrows():
+        coincidencia = banco_disponible[banco_disponible[col_importe_b] == fac[col_importe]]
+        if not coincidencia.empty:
+            idx = coincidencia.index[0]
+            row_b = banco_disponible.loc[idx]
+            cobrada_flags.append("SÍ")
+            fechas_cobro.append(row_b[col_fecha])
+            referencias.append(row_b[col_nmov])
+            banco_disponible = banco_disponible.drop(index=idx)
+        else:
+            cobrada_flags.append("NO")
+            fechas_cobro.append("")
+            referencias.append("")
+
+    df["COBRADA"]           = cobrada_flags
+    df["FECHA COBRO"]       = fechas_cobro
+    df["NRO. APUNTE BANCO"] = referencias
+
+    df = _añadir_observaciones(df, col_importe, col_factura="Código")
+    df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
+    for _col_fecha in ("Fecha", "F. Factura", "Fecha vto."):
+        if _col_fecha in df.columns:
+            df[_col_fecha] = df[_col_fecha].apply(_formatear_fecha)
+
+    carpeta        = os.path.dirname(ruta_facturas)
+    fecha_hoy      = datetime.datetime.now().strftime("%d-%m-%Y_%H-%M-%S")
+    ruta_resultado = os.path.join(carpeta, f"conciliacion_Unicaja_SIDI_{fecha_hoy}.xlsx")
+
+    df = df.map(_limpiar)
+    df.to_excel(ruta_resultado, index=False, engine="openpyxl")
+
+    wb = load_workbook(ruta_resultado)
+    ws = wb.active
+    _aplicar_formato_texto_fechas(ws, df)
     header_fill = PatternFill(fill_type="solid", fgColor=BLUE_DARK)
     header_font = Font(bold=True, color="FFFFFF")
     green_fill  = PatternFill(fill_type="solid", fgColor=GREEN_FILL)
@@ -1456,6 +1771,7 @@ class App(tk.Tk):
             ("Abanca",    "abanca"),
             ("BBVA",      "bbva"),
             ("La Caixa",  "lacaixa"),
+            ("Unicaja",   "unicaja"),
         ]:
             tk.Radiobutton(
                 frame_modo, text=texto, variable=self._modo, value=valor,
@@ -1560,6 +1876,7 @@ class App(tk.Tk):
             "abanca":    "Abanca",
             "bbva":      "BBVA",
             "lacaixa":   "La Caixa",
+            "unicaja":   "Unicaja",
         }
         banco_nombre   = nombres.get(self._modo.get(), self._modo.get())
         listado_nombre = "SIDI" if self._tipo_listado.get() == "sidi" else "Pancho"
@@ -1624,6 +1941,8 @@ class App(tk.Tk):
                     stats = conciliar_lacaixa_sidi(banco, facturas)
                 elif modo == "bbva":
                     stats = conciliar_bbva_sidi(banco, facturas)
+                elif modo == "unicaja":
+                    stats = conciliar_unicaja_sidi(banco, facturas)
                 else:
                     stats = conciliar_bankinter_sidi(banco, facturas)
             else:
@@ -1635,6 +1954,8 @@ class App(tk.Tk):
                     stats = conciliar_lacaixa(banco, facturas)
                 elif modo == "bbva":
                     stats = conciliar_bbva(banco, facturas)
+                elif modo == "unicaja":
+                    stats = conciliar_unicaja(banco, facturas)
                 else:
                     stats = conciliar(banco, facturas)
             self.after(0, self._mostrar_resultado, stats)
