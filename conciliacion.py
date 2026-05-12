@@ -95,6 +95,42 @@ def _aplicar_formato_texto_fechas(ws, df: pd.DataFrame) -> None:
             ws.cell(row=row_idx, column=col_idx).number_format = "@"
 
 
+def _detectar_cols_pancho(facturas: pd.DataFrame) -> tuple[str, str]:
+    """Detecta automáticamente las columnas de nombre e importe en un listado Pancho.
+
+    Prioridades:
+      Nombre  → EMPRESA  >  Nombre
+      Importe → Total    >  IMPORTE  >  Importe
+    """
+    cols = facturas.columns.tolist()
+
+    if "EMPRESA" in cols:
+        col_nombre = "EMPRESA"
+    elif "Nombre" in cols:
+        col_nombre = "Nombre"
+    else:
+        raise ValueError(
+            f"No se encontró columna de nombre en el listado Pancho.\n"
+            f"Columnas disponibles: {cols}\n"
+            f"Se esperaba una de: EMPRESA, Nombre"
+        )
+
+    if "Total" in cols:
+        col_importe = "Total"
+    elif "IMPORTE" in cols:
+        col_importe = "IMPORTE"
+    elif "Importe" in cols:
+        col_importe = "Importe"
+    else:
+        raise ValueError(
+            f"No se encontró columna de importe en el listado Pancho.\n"
+            f"Columnas disponibles: {cols}\n"
+            f"Se esperaba una de: Total, IMPORTE, Importe"
+        )
+
+    return col_nombre, col_importe
+
+
 def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
     """
     Cruza el extracto bancario con las facturas y genera resultado_conciliacion.xlsx.
@@ -299,15 +335,7 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
     facturas.columns = [c.strip() for c in facturas.columns]
 
-    col_nombre  = "Nombre"
-    col_importe = "Importe"
-
-    for col in (col_nombre, col_importe):
-        if col not in facturas.columns:
-            raise ValueError(
-                f"Columna no encontrada en facturas: '{col}'\n"
-                f"Columnas disponibles: {list(facturas.columns)}"
-            )
+    col_nombre, col_importe = _detectar_cols_pancho(facturas)
 
     facturas[col_importe] = (
         facturas[col_importe]
@@ -467,15 +495,7 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str) -> dict:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
     facturas.columns = [c.strip() for c in facturas.columns]
 
-    col_nombre  = "Nombre"
-    col_importe = "Importe"
-
-    for col in (col_nombre, col_importe):
-        if col not in facturas.columns:
-            raise ValueError(
-                f"Columna no encontrada en facturas: '{col}'\n"
-                f"Columnas disponibles: {list(facturas.columns)}"
-            )
+    col_nombre, col_importe = _detectar_cols_pancho(facturas)
 
     facturas[col_importe] = (
         facturas[col_importe]
@@ -637,15 +657,7 @@ def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str) -> dict:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
     facturas.columns = [c.strip() for c in facturas.columns]
 
-    col_nombre  = "Nombre"
-    col_importe = "Importe"
-
-    for col in (col_nombre, col_importe):
-        if col not in facturas.columns:
-            raise ValueError(
-                f"Columna no encontrada en facturas: '{col}'\n"
-                f"Columnas disponibles: {list(facturas.columns)}"
-            )
+    col_nombre, col_importe = _detectar_cols_pancho(facturas)
 
     facturas[col_importe] = (
         facturas[col_importe]
@@ -801,15 +813,7 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str) -> dict:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
     facturas.columns = [c.strip() for c in facturas.columns]
 
-    col_nombre  = "Nombre"
-    col_importe = "Importe"
-
-    for col in (col_nombre, col_importe):
-        if col not in facturas.columns:
-            raise ValueError(
-                f"Columna no encontrada en facturas: '{col}'\n"
-                f"Columnas disponibles: {list(facturas.columns)}"
-            )
+    col_nombre, col_importe = _detectar_cols_pancho(facturas)
 
     facturas[col_importe] = (
         facturas[col_importe]
@@ -1350,15 +1354,7 @@ def conciliar_unicaja(ruta_banco: str, ruta_facturas: str) -> dict:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
     facturas.columns = [c.strip() for c in facturas.columns]
 
-    col_nombre  = "Nombre"
-    col_importe = "Importe"
-
-    for col in (col_nombre, col_importe):
-        if col not in facturas.columns:
-            raise ValueError(
-                f"Columna no encontrada en facturas: '{col}'\n"
-                f"Columnas disponibles: {list(facturas.columns)}"
-            )
+    col_nombre, col_importe = _detectar_cols_pancho(facturas)
 
     facturas[col_importe] = (
         facturas[col_importe]
