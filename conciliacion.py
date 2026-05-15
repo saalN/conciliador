@@ -131,7 +131,57 @@ def _detectar_cols_pancho(facturas: pd.DataFrame) -> tuple[str, str]:
     return col_nombre, col_importe
 
 
-def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
+def _cargar_clientes_R(ruta: str) -> tuple[set, set]:
+    """Lee el listado de clientes y devuelve (cifs_r, nombres_r) para los que tienen G/R == 'R'.
+    - Columna posición 3 (índice 2): Nombre del cliente
+    - Columna posición 8 (índice 7): CIF
+    - Última columna: G/R (solo se incluyen los 'R')
+    """
+    df = pd.read_excel(ruta, dtype=str)
+    col_gr = df.columns[-1]
+    df_r = df[df[col_gr].fillna("").str.strip().str.upper() == "R"]
+
+    def _norm_cif(v) -> str:
+        s = str(v).strip().upper()
+        return s[2:] if s.startswith("ES") else s
+
+    cifs_r: set = set()
+    if df.shape[1] > 7:
+        col_cif_name = df.columns[7]
+        cifs_r = {_norm_cif(v) for v in df_r[col_cif_name].dropna() if str(v).strip()}
+
+    nombres_r: set = set()
+    if df.shape[1] > 2:
+        col_nombre_name = df.columns[2]
+        nombres_r = {_normalizar(v) for v in df_r[col_nombre_name].dropna() if str(v).strip()}
+
+    return cifs_r, nombres_r
+
+
+def _filtrar_por_clientes(
+    df: pd.DataFrame,
+    cifs_r: set,
+    nombres_r: set,
+    col_cif: str,
+    col_nombre: str,
+) -> pd.DataFrame:
+    """Filtra facturas dejando solo clientes tipo 'R' del listado de clientes.
+    - Si col_cif existe en df: cruza por CIF (ignorando prefijo 'ES')
+    - Si no: cruza por nombre normalizado (primeros 15 chars en minúsculas)
+    """
+    def _norm_cif(v) -> str:
+        s = str(v).strip().upper()
+        return s[2:] if s.startswith("ES") else s
+
+    if col_cif in df.columns:
+        mask = df[col_cif].apply(_norm_cif).isin(cifs_r)
+    else:
+        mask = df[col_nombre].apply(_normalizar).isin(nombres_r)
+
+    return df[mask].reset_index(drop=True)
+
+
+def conciliar(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """
     Cruza el extracto bancario con las facturas y genera resultado_conciliacion.xlsx.
     Devuelve un dict con estadísticas.
@@ -185,6 +235,12 @@ def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
         (facturas[col_importe_fac] > 0)
     )
     df = facturas[mask].copy().reset_index(drop=True)
+
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "CIF", col_razon)
+    _excluidas = _n_antes_filtro - len(df)
 
     # ── Cruce ─────────────────────────────────────────────────────────────────
     cobrada_flags = []
@@ -294,11 +350,12 @@ def conciliar(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_pendientes": pendientes[col_importe_fac].sum(),
         "avisos_importe": len(dup_importe),
         "avisos_factura": len(dup_factura),
-        "ruta_resultado": ruta_resultado,
+        "excluidas_clientes": _excluidas,
+        "ruta_resultado":     ruta_resultado,
     }
 
 
-def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_bankinter(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """
     Cruza facturas (Nombre/Importe) contra extracto Bankinter.
     Genera resultado_conciliacion.xlsx.
@@ -346,6 +403,11 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
 
     # ── Solo facturas con importe positivo ────────────────────────────────────
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "CIF", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
 
     # ── Banco: filtrar solo Transferencias con HABER positivo ────────────────
     categorias_validas = {"transferencias"}
@@ -455,11 +517,12 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe":     len(dup_importe),
         "avisos_factura":     len(dup_factura),
+        "excluidas_clientes": _excluidas,
         "ruta_resultado":     ruta_resultado,
     }
 
 
-def conciliar_abanca(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_abanca(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """
     Cruza facturas (Nombre/Importe) contra extracto Abanca.
     Genera resultado_conciliacion.xlsx.
@@ -506,6 +569,11 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str) -> dict:
 
     # ── Solo facturas con importe positivo ────────────────────────────────────
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "CIF", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
 
     # ── Banco: filtrar transferencias con IMPORTE positivo ────────────────────
     categorias_validas = {
@@ -617,11 +685,12 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe":     len(dup_importe),
         "avisos_factura":     len(dup_factura),
+        "excluidas_clientes": _excluidas,
         "ruta_resultado":     ruta_resultado,
     }
 
 
-def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """
     Cruza facturas (Nombre/Importe) contra extracto La Caixa.
     El extracto no tiene cabecera; los datos empiezan en la fila 4 (skiprows=3).
@@ -668,6 +737,11 @@ def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str) -> dict:
 
     # ── Solo facturas con importe positivo ────────────────────────────────────
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "CIF", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
 
     # ── Banco: solo movimientos con importe positivo ───────────────────────────
     banco_disponible = banco[banco[COL_IMPORTE] > 0].copy()
@@ -772,11 +846,12 @@ def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe":     len(dup_importe),
         "avisos_factura":     len(dup_factura),
+        "excluidas_clientes": _excluidas,
         "ruta_resultado":     ruta_resultado,
     }
 
 
-def conciliar_bbva(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_bbva(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """
     Cruza facturas (Nombre/Importe) contra extracto BBVA.
     El extracto tiene 15 filas de cabecera; los datos empiezan en la fila 16.
@@ -824,6 +899,11 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str) -> dict:
 
     # ── Solo facturas con importe positivo ────────────────────────────────────
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "CIF", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
 
     # ── Banco: filtrar TRANSFERENCIAS con IMPORTE positivo ────────────────────
     banco_disponible = banco[
@@ -931,13 +1011,14 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe":     len(dup_importe),
         "avisos_factura":     len(dup_factura),
+        "excluidas_clientes": _excluidas,
         "ruta_resultado":     ruta_resultado,
     }
 
 
 # ── Funciones SIDI ───────────────────────────────────────────────────────────
 
-def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto Bankinter."""
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
     banco.columns = [c.strip() for c in banco.columns]
@@ -986,6 +1067,11 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
     facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
 
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "NIF Facturable", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
 
     categorias_validas = {"transferencias"}
     banco_disponible = banco[
@@ -1061,11 +1147,12 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_cobradas": cobradas[col_importe].sum(),
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
-        "ruta_resultado": ruta_resultado,
+        "excluidas_clientes": _excluidas,
+        "ruta_resultado":     ruta_resultado,
     }
 
 
-def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto Abanca."""
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
     banco.columns = [c.strip() for c in banco.columns]
@@ -1114,6 +1201,11 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
     facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
 
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "NIF Facturable", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
 
     categorias_validas = {
         "transferencias de otras entidades",
@@ -1192,11 +1284,12 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_cobradas": cobradas[col_importe].sum(),
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
-        "ruta_resultado": ruta_resultado,
+        "excluidas_clientes": _excluidas,
+        "ruta_resultado":     ruta_resultado,
     }
 
 
-def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto La Caixa."""
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=3, header=None)
 
@@ -1243,6 +1336,11 @@ def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
     facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
 
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "NIF Facturable", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
     banco_disponible = banco[banco[COL_IMPORTE] > 0].copy()
 
     cobrada_flags, fechas_cobro, referencias = [], [], []
@@ -1313,11 +1411,12 @@ def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_cobradas": cobradas[col_importe].sum(),
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
-        "ruta_resultado": ruta_resultado,
+        "excluidas_clientes": _excluidas,
+        "ruta_resultado":     ruta_resultado,
     }
 
 
-def conciliar_unicaja(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_unicaja(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """
     Cruza facturas (Nombre/Importe) contra extracto Unicaja.
     El extracto tiene 10 filas de cabecera; los datos empiezan en la fila 11.
@@ -1365,6 +1464,11 @@ def conciliar_unicaja(ruta_banco: str, ruta_facturas: str) -> dict:
 
     # ── Solo facturas con importe positivo ────────────────────────────────────
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "CIF", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
 
     # ── Banco: solo movimientos con IMPORTE positivo ──────────────────────────
     banco_disponible = banco[banco[col_importe_b] > 0].copy()
@@ -1469,11 +1573,12 @@ def conciliar_unicaja(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe":     len(dup_importe),
         "avisos_factura":     len(dup_factura),
+        "excluidas_clientes": _excluidas,
         "ruta_resultado":     ruta_resultado,
     }
 
 
-def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto BBVA."""
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=15)
     banco.columns = [c.strip() for c in banco.columns]
@@ -1522,6 +1627,11 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
     facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
 
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "NIF Facturable", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
 
     banco_disponible = banco[
         banco[col_concepto].fillna("").str.strip().str.lower().str.contains("transferencia", regex=False) &
@@ -1596,11 +1706,12 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_cobradas": cobradas[col_importe].sum(),
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
-        "ruta_resultado": ruta_resultado,
+        "excluidas_clientes": _excluidas,
+        "ruta_resultado":     ruta_resultado,
     }
 
 
-def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
+def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto Unicaja."""
     # ── Leer banco Unicaja (cabecera en fila 11) ──────────────────────────────
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=10)
@@ -1650,6 +1761,11 @@ def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
     facturas[col_importe] = pd.to_numeric(facturas[col_importe], errors="coerce")
 
     df = facturas[facturas[col_importe] > 0].copy().reset_index(drop=True)
+    _n_antes_filtro = len(df)
+    if ruta_clientes:
+        cifs_r, nombres_r = _cargar_clientes_R(ruta_clientes)
+        df = _filtrar_por_clientes(df, cifs_r, nombres_r, "NIF Facturable", col_nombre)
+    _excluidas = _n_antes_filtro - len(df)
     banco_disponible = banco[banco[col_importe_b] > 0].copy()
 
     cobrada_flags, fechas_cobro, referencias = [], [], []
@@ -1720,7 +1836,8 @@ def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str) -> dict:
         "importe_cobradas": cobradas[col_importe].sum(),
         "importe_pendientes": pendientes[col_importe].sum(),
         "avisos_importe": len(dup_importe), "avisos_factura": len(dup_factura),
-        "ruta_resultado": ruta_resultado,
+        "excluidas_clientes": _excluidas,
+        "ruta_resultado":     ruta_resultado,
     }
 
 
@@ -1730,7 +1847,7 @@ class App(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Conciliación Bancaria")
-        self.geometry("580x680")
+        self.geometry("580x740")
         self.resizable(True, True)
         self.configure(bg=BG)
 
@@ -1738,6 +1855,7 @@ class App(tk.Tk):
         self._ruta_facturas   = tk.StringVar()
         self._modo            = tk.StringVar(value="bankinter")
         self._tipo_listado    = tk.StringVar(value="pancho")
+        self._ruta_clientes   = tk.StringVar()
 
         self._build_ui()
 
@@ -1804,6 +1922,13 @@ class App(tk.Tk):
             var=self._ruta_facturas,
         )
 
+        # ── Selector clientes (opcional) ────────────────────────────────────
+        self._lbl_clientes = tk.StringVar(value="Listado de clientes  (opcional, *.xlsx)")
+        self._selector_frame_var(
+            labelvar=self._lbl_clientes,
+            var=self._ruta_clientes,
+        )
+
         # ── Botón ejecutar ────────────────────────────────────────────────────
         self._btn_ejecutar = tk.Button(
             self,
@@ -1825,12 +1950,13 @@ class App(tk.Tk):
         frame_res.pack(fill="x", padx=20, pady=(20, 0))
 
         self._lbl_total = self._res_label(frame_res, "Total procesadas:", "—")
-        self._lbl_cobradas = self._res_label(frame_res, "Cobradas:", "—", fg=f"#{GREEN_FILL[:6]}")
+        self._lbl_cobradas = self._res_label(frame_res, "Cobradas:", "—", fg="#1E7E34")
         self._lbl_pendientes = self._res_label(frame_res, "Pendientes:", "—", fg="#c0392b")
         self._lbl_imp_cob = self._res_label(frame_res, "Importe cobrado:", "—")
         self._lbl_imp_pen = self._res_label(frame_res, "Importe pendiente:", "—")
         self._lbl_avisos_importe = self._res_label(frame_res, "Importes duplicados:", "—", fg="#7D4800")
         self._lbl_avisos_factura = self._res_label(frame_res, "Nº facturas duplicados:", "—", fg="#7D4800")
+        self._lbl_excluidas = self._res_label(frame_res, "Excluidas (G/giro):", "—", fg="#888")
 
         # ── Barra de progreso ─────────────────────────────────────────────────
         self._progress = ttk.Progressbar(self, mode="indeterminate", length=480)
@@ -1908,6 +2034,7 @@ class App(tk.Tk):
     def _lanzar(self):
         banco = self._ruta_banco.get().strip()
         facturas = self._ruta_facturas.get().strip()
+        clientes = self._ruta_clientes.get().strip() or None
 
         if not banco:
             messagebox.showwarning("Falta fichero", "Selecciona el extracto del banco.")
@@ -1922,38 +2049,38 @@ class App(tk.Tk):
 
         threading.Thread(
             target=self._ejecutar_hilo,
-            args=(banco, facturas, self._modo.get(), self._tipo_listado.get()),
+            args=(banco, facturas, self._modo.get(), self._tipo_listado.get(), clientes),
             daemon=True,
         ).start()
 
-    def _ejecutar_hilo(self, banco: str, facturas: str, modo: str, tipo_listado: str):
+    def _ejecutar_hilo(self, banco: str, facturas: str, modo: str, tipo_listado: str, ruta_clientes=None):
         try:
             if tipo_listado == "sidi":
                 if modo == "bankinter":
-                    stats = conciliar_bankinter_sidi(banco, facturas)
+                    stats = conciliar_bankinter_sidi(banco, facturas, ruta_clientes)
                 elif modo == "abanca":
-                    stats = conciliar_abanca_sidi(banco, facturas)
+                    stats = conciliar_abanca_sidi(banco, facturas, ruta_clientes)
                 elif modo == "lacaixa":
-                    stats = conciliar_lacaixa_sidi(banco, facturas)
+                    stats = conciliar_lacaixa_sidi(banco, facturas, ruta_clientes)
                 elif modo == "bbva":
-                    stats = conciliar_bbva_sidi(banco, facturas)
+                    stats = conciliar_bbva_sidi(banco, facturas, ruta_clientes)
                 elif modo == "unicaja":
-                    stats = conciliar_unicaja_sidi(banco, facturas)
+                    stats = conciliar_unicaja_sidi(banco, facturas, ruta_clientes)
                 else:
-                    stats = conciliar_bankinter_sidi(banco, facturas)
+                    stats = conciliar_bankinter_sidi(banco, facturas, ruta_clientes)
             else:
                 if modo == "bankinter":
-                    stats = conciliar_bankinter(banco, facturas)
+                    stats = conciliar_bankinter(banco, facturas, ruta_clientes)
                 elif modo == "abanca":
-                    stats = conciliar_abanca(banco, facturas)
+                    stats = conciliar_abanca(banco, facturas, ruta_clientes)
                 elif modo == "lacaixa":
-                    stats = conciliar_lacaixa(banco, facturas)
+                    stats = conciliar_lacaixa(banco, facturas, ruta_clientes)
                 elif modo == "bbva":
-                    stats = conciliar_bbva(banco, facturas)
+                    stats = conciliar_bbva(banco, facturas, ruta_clientes)
                 elif modo == "unicaja":
-                    stats = conciliar_unicaja(banco, facturas)
+                    stats = conciliar_unicaja(banco, facturas, ruta_clientes)
                 else:
-                    stats = conciliar(banco, facturas)
+                    stats = conciliar(banco, facturas, ruta_clientes)
             self.after(0, self._mostrar_resultado, stats)
         except Exception as exc:
             self.after(0, self._mostrar_error, str(exc))
@@ -1969,8 +2096,10 @@ class App(tk.Tk):
         self._lbl_imp_pen.config(text=f"{stats['importe_pendientes']:,.2f} €")
         av_imp = stats.get("avisos_importe", 0)
         av_fac = stats.get("avisos_factura", 0)
+        excl   = stats.get("excluidas_clientes", 0)
         self._lbl_avisos_importe.config(text=str(av_imp) if av_imp == 0 else f"{av_imp}  ⚠")
         self._lbl_avisos_factura.config(text=str(av_fac) if av_fac == 0 else f"{av_fac}  ⚠")
+        self._lbl_excluidas.config(text="—" if not self._ruta_clientes.get().strip() else str(excl))
 
         self._lbl_estado.config(
             text=f"✔ Resultado guardado en: {stats['ruta_resultado']}",
