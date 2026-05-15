@@ -138,8 +138,11 @@ def _cargar_clientes_R(ruta: str) -> tuple[set, set]:
     - Última columna: G/R (solo se incluyen los 'R')
     """
     df = pd.read_excel(ruta, dtype=str)
+    # Forzar todo a str explícitamente: en Windows compilado como .exe,
+    # dtype=str no siempre evita que queden NaN como float.
+    df = df.where(df.notna(), "").astype(str)
     col_gr = df.columns[-1]
-    df_r = df[df[col_gr].fillna("").str.strip().str.upper() == "R"]
+    df_r = df[df[col_gr].str.strip().str.upper() == "R"]
 
     def _norm_cif(v) -> str:
         s = str(v).strip().upper()
@@ -189,6 +192,7 @@ def conciliar(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) ->
     # ── Leer banco ────────────────────────────────────────────────────────────
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=3)
     banco.columns = [c.strip() for c in banco.columns]
+    banco = banco.where(banco.notna(), "").astype(str)
 
     col_importe_banco = "Importe"
     col_tipo_mov = "Tipo movimiento"
@@ -212,6 +216,7 @@ def conciliar(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) ->
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd", skiprows=2)
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl", skiprows=2)
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_tipo_ef = "TIPO EFECTO"
@@ -363,6 +368,7 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
     # ── Leer banco Bankinter (fila 6 = cabecera) ──────────────────────────────
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
     banco.columns = [c.strip() for c in banco.columns]
+    banco = banco.where(banco.notna(), "").astype(str)
 
     col_categoria   = "CATEGORÍA"
     col_descripcion = "DESCRIPCIÓN"
@@ -390,6 +396,7 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre, col_importe = _detectar_cols_pancho(facturas)
@@ -530,6 +537,7 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = N
     # ── Leer banco Abanca (fila 6 = cabecera) ─────────────────────────────────
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
     banco.columns = [c.strip() for c in banco.columns]
+    banco = banco.where(banco.notna(), "").astype(str)
 
     col_tipo_op   = "TIPO OPERACIÓN"
     col_importe_b = "IMPORTE"
@@ -557,6 +565,7 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = N
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre, col_importe = _detectar_cols_pancho(facturas)
@@ -700,6 +709,7 @@ def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = 
     """
     # ── Leer banco La Caixa (sin cabecera, datos desde fila 4) ────────────────
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=3, header=None)
+    banco = banco.where(banco.notna(), "").astype(str)
 
     if banco.shape[1] < 5:
         raise ValueError(
@@ -725,6 +735,7 @@ def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = 
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre, col_importe = _detectar_cols_pancho(facturas)
@@ -861,6 +872,7 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = Non
     # ── Leer banco BBVA (cabecera en fila 16) ─────────────────────────────────
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=15)
     banco.columns = [c.strip() for c in banco.columns]
+    banco = banco.where(banco.notna(), "").astype(str)
 
     col_fecha       = "F. CONTABLE"
     col_concepto    = "CONCEPTO"
@@ -887,6 +899,7 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = Non
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre, col_importe = _detectar_cols_pancho(facturas)
@@ -1023,6 +1036,7 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes:
     """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto Bankinter."""
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
     banco.columns = [c.strip() for c in banco.columns]
+    banco = banco.where(banco.notna(), "").astype(str)
 
     col_categoria   = "CATEGORÍA"
     col_haber       = "HABER"
@@ -1049,6 +1063,7 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre  = "Cliente/SubCliente"
@@ -1158,6 +1173,7 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: st
     """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto Abanca."""
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=5)
     banco.columns = [c.strip() for c in banco.columns]
+    banco = banco.where(banco.notna(), "").astype(str)
 
     col_tipo_op    = "TIPO OPERACIÓN"
     col_importe_b  = "IMPORTE"
@@ -1184,6 +1200,7 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: st
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre  = "Cliente/SubCliente"
@@ -1295,6 +1312,7 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: st
 def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) -> dict:
     """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto La Caixa."""
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=3, header=None)
+    banco = banco.where(banco.notna(), "").astype(str)
 
     if banco.shape[1] < 5:
         raise ValueError(
@@ -1319,6 +1337,7 @@ def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: s
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre  = "Cliente/SubCliente"
@@ -1429,6 +1448,7 @@ def conciliar_unicaja(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = 
     # ── Leer banco Unicaja (cabecera en fila 11) ──────────────────────────────
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=10)
     banco.columns = [c.strip() for c in banco.columns]
+    banco = banco.where(banco.notna(), "").astype(str)
 
     col_fecha    = "Fecha de operación"
     col_importe_b = "Importe"
@@ -1454,6 +1474,7 @@ def conciliar_unicaja(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = 
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre, col_importe = _detectar_cols_pancho(facturas)
@@ -1585,6 +1606,7 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
     """Cruza facturas SIDI (Cliente/SubCliente + Total) contra extracto BBVA."""
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=15)
     banco.columns = [c.strip() for c in banco.columns]
+    banco = banco.where(banco.notna(), "").astype(str)
 
     col_fecha        = "F. CONTABLE"
     col_concepto     = "CONCEPTO"
@@ -1610,6 +1632,7 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre  = "Cliente/SubCliente"
@@ -1719,6 +1742,7 @@ def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: s
     # ── Leer banco Unicaja (cabecera en fila 11) ──────────────────────────────
     banco = pd.read_excel(ruta_banco, dtype=str, skiprows=10)
     banco.columns = [c.strip() for c in banco.columns]
+    banco = banco.where(banco.notna(), "").astype(str)
 
     col_fecha     = "Fecha de operación"
     col_importe_b = "Importe"
@@ -1744,6 +1768,7 @@ def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: s
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="xlrd")
     else:
         facturas = pd.read_excel(ruta_facturas, dtype=str, engine="openpyxl")
+    facturas = facturas.where(facturas.notna(), "").astype(str)
     facturas.columns = [c.strip() for c in facturas.columns]
 
     col_nombre  = "Cliente/SubCliente"
