@@ -8,6 +8,7 @@ import subprocess
 import sys
 import os
 import datetime
+import traceback
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
@@ -205,6 +206,7 @@ def conciliar(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) ->
 
     banco[col_importe_banco] = (
         banco[col_importe_banco]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -229,6 +231,7 @@ def conciliar(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) ->
 
     facturas[col_importe_fac] = (
         facturas[col_importe_fac]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -236,7 +239,7 @@ def conciliar(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) ->
 
     # ── Filtrar transferencias positivas ──────────────────────────────────────
     mask = (
-        (facturas[col_tipo_ef].str.strip().str.upper() == "TRANSFERENCIA") &
+        (facturas[col_tipo_ef].fillna("").astype(str).str.strip().str.upper() == "TRANSFERENCIA") &
         (facturas[col_importe_fac] > 0)
     )
     df = facturas[mask].copy().reset_index(drop=True)
@@ -385,6 +388,7 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
 
     banco[col_haber] = (
         banco[col_haber]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -403,6 +407,7 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -554,6 +559,7 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = N
 
     banco[col_importe_b] = (
         banco[col_importe_b]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -572,6 +578,7 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = N
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -742,6 +749,7 @@ def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = 
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -888,6 +896,7 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = Non
 
     banco[col_importe_b] = (
         banco[col_importe_b]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -906,6 +915,7 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = Non
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1053,6 +1063,7 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes:
 
     banco[col_haber] = (
         banco[col_haber]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1078,6 +1089,7 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes:
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1190,6 +1202,7 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: st
 
     banco[col_importe_b] = (
         banco[col_importe_b]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1215,6 +1228,7 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: st
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1352,6 +1366,7 @@ def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: s
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1463,6 +1478,7 @@ def conciliar_unicaja(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = 
 
     banco[col_importe_b] = (
         banco[col_importe_b]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1481,6 +1497,7 @@ def conciliar_unicaja(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = 
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1622,6 +1639,7 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
 
     banco[col_importe_b] = (
         banco[col_importe_b]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1647,6 +1665,7 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1757,6 +1776,7 @@ def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: s
 
     banco[col_importe_b] = (
         banco[col_importe_b]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -1783,6 +1803,7 @@ def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: s
 
     facturas[col_importe] = (
         facturas[col_importe]
+        .fillna("").astype(str)
         .str.replace(",", ".", regex=False)
         .str.replace(r"[^\d.\-]", "", regex=True)
     )
@@ -2111,7 +2132,7 @@ class App(tk.Tk):
                     stats = conciliar(banco, facturas, ruta_clientes)
             self.after(0, self._mostrar_resultado, stats)
         except Exception as exc:
-            self.after(0, self._mostrar_error, str(exc))
+            self.after(0, self._mostrar_error, str(exc), traceback.format_exc())
 
     def _mostrar_resultado(self, stats: dict):
         self._progress.stop()
@@ -2140,11 +2161,12 @@ class App(tk.Tk):
         ):
             self._abrir_fichero(stats["ruta_resultado"])
 
-    def _mostrar_error(self, mensaje: str):
+    def _mostrar_error(self, mensaje: str, detalle: str = ""):
         self._progress.stop()
         self._btn_ejecutar.config(state="normal")
         self._lbl_estado.config(text=f"Error: {mensaje}", fg="#c0392b")
-        messagebox.showerror("Error en la conciliación", mensaje)
+        texto = f"{mensaje}\n\n{detalle}" if detalle else mensaje
+        messagebox.showerror("Error en la conciliación", texto)
 
     @staticmethod
     def _abrir_fichero(ruta: str):
