@@ -272,7 +272,7 @@ def conciliar(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = None) ->
 
     df["COBRADA"] = cobrada_flags
     df["FECHA COBRO"] = fechas_cobro
-    df["NRO. APUNTE BANCO"] = apuntes_banco
+    df["Descripción"] = apuntes_banco
 
     df = _añadir_observaciones(df, col_importe_fac)
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -433,7 +433,7 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
             row_b = banco_disponible.loc[idx]
             cobrada_flags.append("SÍ")
             fechas_cobro.append(row_b[col_fecha])
-            referencias.append(row_b[col_referencia])
+            referencias.append(row_b[col_descripcion])
             banco_disponible = banco_disponible.drop(index=idx)
         else:
             cobrada_flags.append("NO")
@@ -442,7 +442,7 @@ def conciliar_bankinter(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe)
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -534,9 +534,10 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = N
     col_tipo_op   = "TIPO OPERACIÓN"
     col_importe_b = "IMPORTE"
     col_fecha     = "F. OPERACIÓN"
-    col_referencia = "REFERENCIA"
+    col_referencia  = "REFERENCIA"
+    col_descripcion = "DESCRIPCIÓN"
 
-    for col in (col_tipo_op, col_importe_b, col_fecha, col_referencia):
+    for col in (col_tipo_op, col_importe_b, col_fecha, col_referencia, col_descripcion):
         if col not in banco.columns:
             raise ValueError(
                 f"Columna no encontrada en el banco Abanca: '{col}'\n"
@@ -602,7 +603,7 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = N
             row_b = banco_disponible.loc[idx]
             cobrada_flags.append("SÍ")
             fechas_cobro.append(row_b[col_fecha])
-            referencias.append(row_b[col_referencia])
+            referencias.append(row_b[col_descripcion])
             banco_disponible = banco_disponible.drop(index=idx)
         else:
             cobrada_flags.append("NO")
@@ -611,7 +612,7 @@ def conciliar_abanca(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = N
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe)
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -772,7 +773,7 @@ def conciliar_lacaixa(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = 
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe)
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -863,10 +864,10 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = Non
 
     col_fecha       = "F. CONTABLE"
     col_concepto    = "CONCEPTO"
-    col_beneficiario = "BENEFICIARIO/ORDENANTE"
-    col_importe_b   = "IMPORTE"
+    col_observaciones = "OBSERVACIONES"
+    col_importe_b     = "IMPORTE"
 
-    for col in (col_fecha, col_concepto, col_beneficiario, col_importe_b):
+    for col in (col_fecha, col_concepto, col_observaciones, col_importe_b):
         if col not in banco.columns:
             raise ValueError(
                 f"Columna no encontrada en el banco BBVA: '{col}'\n"
@@ -928,7 +929,7 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = Non
             row_b = banco_disponible.loc[idx]
             cobrada_flags.append("SÍ")
             fechas_cobro.append(row_b[col_fecha])
-            referencias.append(row_b[col_beneficiario])
+            referencias.append(row_b[col_observaciones])
             banco_disponible = banco_disponible.drop(index=idx)
         else:
             cobrada_flags.append("NO")
@@ -937,7 +938,7 @@ def conciliar_bbva(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = Non
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe)
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -1027,8 +1028,9 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes:
     col_haber       = "HABER"
     col_fecha       = "FECHA CONTABLE"
     col_referencia  = "REFERENCIA"
+    col_descripcion = "DESCRIPCIÓN"
 
-    for col in (col_categoria, col_haber, col_fecha, col_referencia):
+    for col in (col_categoria, col_haber, col_fecha, col_referencia, col_descripcion):
         if col not in banco.columns:
             raise ValueError(
                 f"Columna no encontrada en el banco Bankinter: '{col}'\n"
@@ -1088,7 +1090,7 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes:
             row_b = banco_disponible.loc[idx]
             cobrada_flags.append("SÍ")
             fechas_cobro.append(row_b[col_fecha])
-            referencias.append(row_b[col_referencia])
+            referencias.append(row_b[col_descripcion])
             banco_disponible = banco_disponible.drop(index=idx)
         else:
             cobrada_flags.append("NO")
@@ -1097,7 +1099,7 @@ def conciliar_bankinter_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes:
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe, col_factura="Código")
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -1160,9 +1162,10 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: st
     col_tipo_op    = "TIPO OPERACIÓN"
     col_importe_b  = "IMPORTE"
     col_fecha      = "F. OPERACIÓN"
-    col_referencia = "REFERENCIA"
+    col_referencia  = "REFERENCIA"
+    col_descripcion = "DESCRIPCIÓN"
 
-    for col in (col_tipo_op, col_importe_b, col_fecha, col_referencia):
+    for col in (col_tipo_op, col_importe_b, col_fecha, col_referencia, col_descripcion):
         if col not in banco.columns:
             raise ValueError(
                 f"Columna no encontrada en el banco Abanca: '{col}'\n"
@@ -1225,7 +1228,7 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: st
             row_b = banco_disponible.loc[idx]
             cobrada_flags.append("SÍ")
             fechas_cobro.append(row_b[col_fecha])
-            referencias.append(row_b[col_referencia])
+            referencias.append(row_b[col_descripcion])
             banco_disponible = banco_disponible.drop(index=idx)
         else:
             cobrada_flags.append("NO")
@@ -1234,7 +1237,7 @@ def conciliar_abanca_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: st
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe, col_factura="Código")
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -1361,7 +1364,7 @@ def conciliar_lacaixa_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: s
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe, col_factura="Código")
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -1499,7 +1502,7 @@ def conciliar_unicaja(ruta_banco: str, ruta_facturas: str, ruta_clientes: str = 
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe)
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -1585,10 +1588,10 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
 
     col_fecha        = "F. CONTABLE"
     col_concepto     = "CONCEPTO"
-    col_beneficiario = "BENEFICIARIO/ORDENANTE"
-    col_importe_b    = "IMPORTE"
+    col_observaciones = "OBSERVACIONES"
+    col_importe_b     = "IMPORTE"
 
-    for col in (col_fecha, col_concepto, col_beneficiario, col_importe_b):
+    for col in (col_fecha, col_concepto, col_observaciones, col_importe_b):
         if col not in banco.columns:
             raise ValueError(
                 f"Columna no encontrada en el banco BBVA: '{col}'\n"
@@ -1647,7 +1650,7 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
             row_b = banco_disponible.loc[idx]
             cobrada_flags.append("SÍ")
             fechas_cobro.append(row_b[col_fecha])
-            referencias.append(row_b[col_beneficiario])
+            referencias.append(row_b[col_observaciones])
             banco_disponible = banco_disponible.drop(index=idx)
         else:
             cobrada_flags.append("NO")
@@ -1656,7 +1659,7 @@ def conciliar_bbva_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: str 
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe, col_factura="Código")
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
@@ -1786,7 +1789,7 @@ def conciliar_unicaja_sidi(ruta_banco: str, ruta_facturas: str, ruta_clientes: s
 
     df["COBRADA"]           = cobrada_flags
     df["FECHA COBRO"]       = fechas_cobro
-    df["NRO. APUNTE BANCO"] = referencias
+    df["Descripción"] = referencias
 
     df = _añadir_observaciones(df, col_importe, col_factura="Código")
     df["FECHA COBRO"] = df["FECHA COBRO"].apply(_formatear_fecha)
